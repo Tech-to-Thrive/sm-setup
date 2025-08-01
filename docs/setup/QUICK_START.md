@@ -1,17 +1,31 @@
 # Stack Masters Quick Start
 
-## One-Line Installation
+## **Copy-Paste Installation**
 
-To install Stack Masters on your fresh Linux VPS, simply run:
+### **🖥️ VPS/Server Setup** (Production)
+For Hostinger, DigitalOcean, Vultr, AWS, Google Cloud, etc.
 
+**Linux/Unix:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Tech-to-Thrive/sm-setup/main/setup.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Tech-to-Thrive/sm-setup/main/setup.sh | bash -s -- --server
 ```
 
-Or if you prefer wget:
+**Windows Server:**
+```powershell
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/Tech-to-Thrive/sm-setup/main/setup-windows.ps1" -OutFile "setup-windows.ps1"; .\setup-windows.ps1 -Server
+```
 
+### **💻 Local Development** 
+For Mac, Windows Desktop, Linux Desktop
+
+**Linux/Mac:**
 ```bash
-wget -qO- https://raw.githubusercontent.com/Tech-to-Thrive/sm-setup/main/setup.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Tech-to-Thrive/sm-setup/main/setup.sh | bash -s -- --local
+```
+
+**Windows Desktop:**
+```powershell
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/Tech-to-Thrive/sm-setup/main/setup-windows.ps1" -OutFile "setup-windows.ps1"; .\setup-windows.ps1 -Local
 ```
 
 ## What This Does

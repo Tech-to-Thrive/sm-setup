@@ -5,6 +5,9 @@ param(
     [string]$RepoUrl = "",
     [switch]$SkipFirewall = $false,
     [switch]$SkipAuth = $false,
+    [switch]$Server = $false,
+    [switch]$Local = $false,
+    [switch]$Development = $false,
     [switch]$Help = $false
 )
 
@@ -166,7 +169,48 @@ function Configure-Firewall {
         return
     }
     
-    Write-Info "Configuring Windows Firewall..."
+    # Determine deployment mode from parameters
+    $deploymentMode = ""
+    if ($Server) {
+        $deploymentMode = "1"
+    } elseif ($Local -or $Development) {
+        $deploymentMode = "2"
+    }
+    
+    # If no parameter specified, prompt user
+    if ([string]::IsNullOrEmpty($deploymentMode)) {
+        Write-Host ""
+        Write-Info "Deployment Mode Selection"
+        Write-Host "Please select your deployment type:"
+        Write-Host "1) Server deployment (VPS/Cloud) - Configure firewall with required ports"
+        Write-Host "2) Local development (Mac/Windows/Linux) - Skip firewall configuration"
+        Write-Host ""
+        
+        $deploymentMode = Read-Host "Select mode [1-2] (default: 1)"
+        if ([string]::IsNullOrEmpty($deploymentMode)) {
+            $deploymentMode = "1"
+        }
+    }
+    
+    switch ($deploymentMode) {
+        "1" {
+            Write-Info "Server deployment mode selected - configuring firewall..."
+            Configure-ServerFirewall
+        }
+        "2" {
+            Write-Info "Local development mode selected - skipping firewall configuration"
+            Write-Info "Assuming local firewall/router handles port access"
+            return
+        }
+        default {
+            Write-Warning "Invalid selection. Defaulting to server deployment mode."
+            Configure-ServerFirewall
+        }
+    }
+}
+
+function Configure-ServerFirewall {
+    Write-Info "Configuring Windows Firewall for server deployment..."
     
     $ports = @(80, 443, 8080, 3000, 3001, 3002, 5678, 9090, 9999, 587, 465)
     

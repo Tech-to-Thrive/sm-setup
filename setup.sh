@@ -9,6 +9,50 @@ set -euo pipefail
 # Script version
 VERSION="1.0.0"
 
+# Parse command line arguments
+DEPLOYMENT_MODE=""
+SKIP_FIREWALL=false
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --server)
+            DEPLOYMENT_MODE="1"
+            shift
+            ;;
+        --local|--development)
+            DEPLOYMENT_MODE="2"
+            shift
+            ;;
+        --skip-firewall)
+            SKIP_FIREWALL=true
+            shift
+            ;;
+        --help)
+            echo "Stack Masters Setup Script v$VERSION"
+            echo ""
+            echo "Usage: $0 [OPTIONS]"
+            echo ""
+            echo "Options:"
+            echo "  --server          Server deployment mode (configure firewall)"
+            echo "  --local           Local development mode (skip firewall)"
+            echo "  --development     Same as --local"
+            echo "  --skip-firewall   Skip firewall configuration entirely"
+            echo "  --help            Show this help message"
+            echo ""
+            echo "Examples:"
+            echo "  $0                # Interactive mode (default)"
+            echo "  $0 --server       # Server deployment, no prompts"
+            echo "  $0 --local        # Local development, no prompts"
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1"
+            echo "Use --help for usage information"
+            exit 1
+            ;;
+    esac
+done
+
 # Color codes for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -221,9 +265,45 @@ install_docker() {
 
 # Configure firewall rules
 configure_firewall() {
-    log_info "Configuring firewall rules..."
+    if [ "$SKIP_FIREWALL" = true ]; then
+        log_info "Skipping firewall configuration (--skip-firewall flag)"
+        return
+    fi
     
-    # Open all required ports for both production and local development
+    # Use command line argument if provided, otherwise prompt
+    if [ -z "$DEPLOYMENT_MODE" ]; then
+        log_info "Deployment Mode Selection"
+        echo ""
+        echo "Please select your deployment type:"
+        echo "1) Server deployment (VPS/Cloud) - Configure firewall with required ports"
+        echo "2) Local development (Mac/Windows/Linux) - Skip firewall configuration"
+        echo ""
+        read -p "Select mode [1-2] (default: 1): " DEPLOYMENT_MODE
+        
+        # Default to server mode if no input
+        DEPLOYMENT_MODE=${DEPLOYMENT_MODE:-1}
+    fi
+    
+    case $DEPLOYMENT_MODE in
+        1)
+            log_info "Server deployment mode selected - configuring firewall..."
+            configure_server_firewall
+            ;;
+        2)
+            log_info "Local development mode selected - skipping firewall configuration"
+            log_info "Assuming local firewall/router handles port access"
+            return
+            ;;
+        *)
+            log_error "Invalid selection. Defaulting to server deployment mode."
+            configure_server_firewall
+            ;;
+    esac
+}
+
+# Configure firewall for server deployment
+configure_server_firewall() {
+    # Open all required ports for server deployment
     PORTS=(
         "80:tcp"      # HTTP (Nginx proxy)
         "443:tcp"     # HTTPS (Nginx proxy)
@@ -238,7 +318,7 @@ configure_firewall() {
         "465:tcp"     # SMTPS (secure outbound email SSL/TLS)
     )
     
-    log_info "Note: Opening all service ports to support both domain-based (reverse proxy) and direct access configurations"
+    log_info "Opening ports for Stack Masters services and web access"
     
     # Detect firewall
     if command -v ufw &> /dev/null; then

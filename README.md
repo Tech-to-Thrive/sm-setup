@@ -2,18 +2,39 @@
 
 Universal provisioning scripts for Stack Masters deployment across any Linux/Windows server.
 
-## 🚀 Quick Start
+## 🎯 **Pick Your Setup:**
 
-### Linux/Unix Systems
+### **🖥️ VPS/Server Deployment** (Production)
+*Hostinger, DigitalOcean, AWS, Google Cloud, etc.*
+
+**Linux/Unix:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Tech-to-Thrive/sm-setup/main/setup.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Tech-to-Thrive/sm-setup/main/setup.sh | bash -s -- --server
 ```
 
-### Windows Server
+**Windows Server:**
 ```powershell
-Invoke-WebRequest -Uri "https://raw.githubusercontent.com/Tech-to-Thrive/sm-setup/main/setup-windows.ps1" -OutFile "setup-windows.ps1"
-.\setup-windows.ps1
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/Tech-to-Thrive/sm-setup/main/setup-windows.ps1" -OutFile "setup-windows.ps1"; .\setup-windows.ps1 -Server
 ```
+
+### **💻 Local Development**
+*Mac, Windows Desktop, Linux Desktop*
+
+**Linux/Mac:**
+```bash
+curl -fsSL https://raw.githubusercontent.com/Tech-to-Thrive/sm-setup/main/setup.sh | bash -s -- --local
+```
+
+**Windows Desktop:**
+```powershell
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/Tech-to-Thrive/sm-setup/main/setup-windows.ps1" -OutFile "setup-windows.ps1"; .\setup-windows.ps1 -Local
+```
+
+---
+
+### **What's the Difference?**
+- **VPS/Server**: Opens firewall ports, configures security for internet access
+- **Local Dev**: Skips firewall, perfect for localhost development
 
 ## 📚 Documentation
 
@@ -42,6 +63,18 @@ apt, yum/dnf, pacman, zypper, chocolatey
 - **GitHub CLI** - Repository management and authentication
 - **System utilities** - curl, wget, build tools
 - **Firewall configuration** - Secure port setup (80, 443, 8080)
+
+## 🎯 **What's the Difference?**
+
+### **VPS/Server Mode** (Default)
+- ✅ **Opens firewall ports** for web access and Stack Masters services
+- ✅ **Configures security** for internet-facing deployment
+- ✅ **Perfect for**: Production, staging, public VPS
+
+### **Local Development Mode**
+- ✅ **Skips firewall config** - uses your local system settings
+- ✅ **Installs everything** - Git, Docker, GitHub CLI
+- ✅ **Perfect for**: Mac, Windows Desktop, Linux Desktop development
 
 ## 🔧 Advanced Usage
 
