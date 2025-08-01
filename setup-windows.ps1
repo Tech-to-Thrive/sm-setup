@@ -168,7 +168,7 @@ function Configure-Firewall {
     
     Write-Info "Configuring Windows Firewall..."
     
-    $ports = @(80, 443, 8080)
+    $ports = @(80, 443, 8080, 3000, 3001, 3002, 5678, 9090, 9999, 587, 465)
     
     foreach ($port in $ports) {
         try {

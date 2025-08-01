@@ -223,14 +223,22 @@ install_docker() {
 configure_firewall() {
     log_info "Configuring firewall rules..."
     
-    # Only expose external ports - all other services are internal
+    # Open all required ports for both production and local development
     PORTS=(
         "80:tcp"      # HTTP (Nginx proxy)
         "443:tcp"     # HTTPS (Nginx proxy)
         "8080:tcp"    # Alternative HTTP port
+        "3000:tcp"    # Grafana
+        "3001:tcp"    # Stack Manager UI
+        "3002:tcp"    # Stack Manager API
+        "5678:tcp"    # n8n
+        "9090:tcp"    # Prometheus
+        "9999:tcp"    # Auth proxy
+        "587:tcp"     # SMTP Submission (secure outbound email)
+        "465:tcp"     # SMTPS (secure outbound email SSL/TLS)
     )
     
-    log_info "Note: All services (Grafana, Stack Manager, n8n, etc.) will be accessed via subdomain routing through Nginx"
+    log_info "Note: Opening all service ports to support both domain-based (reverse proxy) and direct access configurations"
     
     # Detect firewall
     if command -v ufw &> /dev/null; then
