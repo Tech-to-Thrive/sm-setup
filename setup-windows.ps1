@@ -252,16 +252,50 @@ function Authenticate-GitHub {
     }
     
     Write-Info "GitHub authentication required for repository access"
-    Write-Info "A browser window will open for authentication"
-    Write-Info "If browser doesn't open, you'll see a device code to enter at: https://github.com/login/device"
     
-    try {
-        gh auth login --web
-        Write-Success "GitHub authentication successful"
+    # Detect server environment (Windows Server or --Server flag)  
+    $isServerEnvironment = ($Server -or (Get-CimInstance Win32_OperatingSystem).ProductType -ne 1)
+    
+    if ($isServerEnvironment) {
+        Write-Info "Server environment detected - using device code authentication"
+        Write-Info "Please visit https://github.com/login/device and enter the code shown below:"
+        Write-Host ""
+        
+        try {
+            gh auth login
+            Write-Success "GitHub authentication successful"
+        }
+        catch {
+            Write-Error-Custom "GitHub authentication failed: $($_.Exception.Message)"
+            exit 1
+        }
     }
-    catch {
-        Write-Error-Custom "GitHub authentication failed: $($_.Exception.Message)"
-        exit 1
+    else {
+        Write-Info "Desktop environment detected - opening browser for authentication"
+        Write-Info "If browser doesn't open, you'll see a device code to enter at: https://github.com/login/device"
+        Write-Host ""
+        
+        try {
+            # Try browser auth first with timeout
+            $job = Start-Job -ScriptBlock { gh auth login --web }
+            Wait-Job $job -Timeout 30 | Out-Null
+            
+            if ($job.State -eq "Completed") {
+                Receive-Job $job
+                Write-Success "GitHub authentication successful"
+            }
+            else {
+                Stop-Job $job
+                Remove-Job $job
+                Write-Info "Browser authentication timed out, using device code flow..."
+                gh auth login
+                Write-Success "GitHub authentication successful"
+            }
+        }
+        catch {
+            Write-Error-Custom "GitHub authentication failed: $($_.Exception.Message)"
+            exit 1
+        }
     }
 }
 

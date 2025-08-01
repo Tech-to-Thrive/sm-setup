@@ -363,14 +363,23 @@ github_auth() {
     
     echo ""
     log_info "GitHub authentication required for repository access"
-    log_info "A browser window will open for authentication"
-    log_info "If you're on a remote server, you'll see a code to enter at: https://github.com/login/device"
-    echo ""
     
-    # Attempt browser-based auth first, fall back to device code
-    if ! gh auth login --web 2>/dev/null; then
-        log_info "Browser authentication not available, using device code flow..."
+    # Detect server environment (SSH, no display, or --server flag)
+    if [[ -n "${SSH_CONNECTION:-}" ]] || [[ -z "${DISPLAY:-}" ]] || [[ "$DEPLOYMENT_MODE" == "1" ]]; then
+        log_info "Server environment detected - using device code authentication"
+        log_info "Please visit https://github.com/login/device and enter the code shown below:"
+        echo ""
         gh auth login
+    else
+        log_info "Desktop environment detected - opening browser for authentication"
+        log_info "If browser doesn't open, you'll see a device code to enter at: https://github.com/login/device"
+        echo ""
+        
+        # Try browser auth first, fallback to device code
+        if ! timeout 30 gh auth login --web 2>/dev/null; then
+            log_info "Browser authentication failed or timed out, using device code flow..."
+            gh auth login
+        fi
     fi
     
     if gh auth status &> /dev/null; then
