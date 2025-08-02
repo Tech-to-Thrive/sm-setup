@@ -258,7 +258,17 @@ function Authenticate-GitHub {
     
     if ($isServerEnvironment) {
         Write-Info "Server environment detected - using device code authentication"
-        Write-Info "Please visit https://github.com/login/device and enter the code shown below:"
+        Write-Host ""
+        Write-Host "==========================================" -ForegroundColor Yellow
+        Write-Info "GITHUB AUTHENTICATION REQUIRED"
+        Write-Host "==========================================" -ForegroundColor Yellow
+        Write-Host ""
+        Write-Info "1. GitHub will display a device code below"
+        Write-Info "2. Copy the device code"
+        Write-Info "3. Visit: https://github.com/login/device"
+        Write-Info "4. Paste the code and complete authentication"
+        Write-Host ""
+        Write-Host "Starting GitHub authentication..." -ForegroundColor Green
         Write-Host ""
         
         try {

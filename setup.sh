@@ -367,8 +367,19 @@ github_auth() {
     # Detect server environment (SSH, no display, or --server flag)
     if [[ -n "${SSH_CONNECTION:-}" ]] || [[ -z "${DISPLAY:-}" ]] || [[ "$DEPLOYMENT_MODE" == "1" ]]; then
         log_info "Server environment detected - using device code authentication"
-        log_info "Please visit https://github.com/login/device and enter the code shown below:"
         echo ""
+        echo "=========================================="
+        log_info "GITHUB AUTHENTICATION REQUIRED"
+        echo "=========================================="
+        echo ""
+        log_info "1. GitHub will display a device code below"
+        log_info "2. Copy the device code"
+        log_info "3. Visit: https://github.com/login/device"
+        log_info "4. Paste the code and complete authentication"
+        echo ""
+        echo "Starting GitHub authentication..."
+        echo ""
+        
         gh auth login
     else
         log_info "Desktop environment detected - opening browser for authentication"
