@@ -950,22 +950,24 @@ function Start-ProvisioningWizard {
         
         Write-Info "Starting provisioning wizard on port 8080..."
         
-        # Create process start info for proper detachment
-        $processInfo = New-Object System.Diagnostics.ProcessStartInfo
-        $processInfo.FileName = "node"
-        $processInfo.Arguments = "server-integrated.js"
-        $processInfo.WorkingDirectory = $backendDir
-        $processInfo.UseShellExecute = $false
-        $processInfo.CreateNoWindow = $true
+        # Create a persistent CMD process to run Node.js
+        # This approach ensures the process survives PowerShell exit
+        $cmdArgs = "/c cd /d `"$backendDir`" && set HOST=$hostBinding && set PORT=8080 && set NODE_ENV=production && node server-integrated.js"
         
-        # Set environment variables for the process
-        $processInfo.EnvironmentVariables["HOST"] = $hostBinding
-        $processInfo.EnvironmentVariables["PORT"] = "8080"
-        $processInfo.EnvironmentVariables["NODE_ENV"] = "production"
+        # Start using cmd.exe with START command for true detachment
+        $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+        $startInfo.FileName = "cmd.exe"
+        $startInfo.Arguments = "/c start /b cmd.exe $cmdArgs"
+        $startInfo.UseShellExecute = $true
+        $startInfo.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+        $startInfo.CreateNoWindow = $true
         
-        # Start the detached process
-        $process = [System.Diagnostics.Process]::Start($processInfo)
-        Write-Info "Provisioning wizard started with PID: $($process.Id)"
+        $process = [System.Diagnostics.Process]::Start($startInfo)
+        
+        # Give it a moment to spawn the child process
+        Start-Sleep -Milliseconds 500
+        
+        Write-Info "Provisioning wizard starting..."
         
         # Wait for server to be ready with health check
         Write-Info "Waiting for server to be ready..."
@@ -996,6 +998,26 @@ function Start-ProvisioningWizard {
             Write-Warning "Server may still be starting up. Check the process manually."
             Show-WizardAccessInfo -HostBinding $hostBinding
         }
+        
+        # Save wizard info to file for later reference
+        $wizardInfoFile = Join-Path $wizardDir "wizard-info.txt"
+        $wizardInfo = @"
+Stack Masters Provisioning Wizard Information
+=============================================
+Started: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+URL: http://$hostBinding:8080
+Backend Directory: $backendDir
+Host Binding: $hostBinding
+
+To check if wizard is running:
+  netstat -an | findstr :8080
+
+To stop the wizard:
+  1. Find the process: netstat -ano | findstr :8080
+  2. Kill the process: taskkill /F /PID <process_id>
+"@
+        Set-Content -Path $wizardInfoFile -Value $wizardInfo
+        Write-Info "Wizard information saved to: $wizardInfoFile"
     }
     finally {
         Pop-Location
