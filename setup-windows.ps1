@@ -683,14 +683,77 @@ function Setup-ProvisioningWizard {
     }
     
     if (Test-Path $targetWizardDir) {
-        $backupDir = "$targetWizardDir.backup.$(Get-Date -Format 'yyyyMMddHHmmss')"
-        Write-Warning "Directory $targetWizardDir already exists. Backing up to $backupDir..."
-        try {
-            Move-Item $targetWizardDir $backupDir -Force
-        }
-        catch {
-            Write-Warning "Could not backup existing directory. Removing it instead."
-            Remove-Item $targetWizardDir -Recurse -Force
+        Write-Warning "Directory $targetWizardDir already exists. Attempting cleanup..."
+        
+        # First, try to stop any processes using this directory
+        $retryCount = 0
+        $maxRetries = 3
+        $cleaned = $false
+        
+        while (-not $cleaned -and $retryCount -lt $maxRetries) {
+            $retryCount++
+            
+            # Check for PID file first
+            $pidFile = Join-Path $targetWizardDir "wizard.pid"
+            if (Test-Path $pidFile) {
+                try {
+                    $pid = Get-Content $pidFile -ErrorAction SilentlyContinue
+                    if ($pid) {
+                        $proc = Get-Process -Id $pid -ErrorAction SilentlyContinue
+                        if ($proc) {
+                            Write-Info "Stopping wizard process from PID file (PID: $pid)..."
+                            Stop-Process -Id $pid -Force
+                            Start-Sleep -Seconds 2
+                        }
+                    }
+                    Remove-Item $pidFile -Force -ErrorAction SilentlyContinue
+                }
+                catch {
+                    # Ignore errors
+                }
+            }
+            
+            # Check for any Node.js processes using this directory
+            $nodeProcesses = Get-Process -Name "node" -ErrorAction SilentlyContinue
+            if ($nodeProcesses) {
+                foreach ($proc in $nodeProcesses) {
+                    try {
+                        # Get command line to check if it's our wizard
+                        $commandLine = (Get-CimInstance Win32_Process -Filter "ProcessId = $($proc.Id)").CommandLine
+                        if ($commandLine -and $commandLine -like "*$targetWizardDir*") {
+                            Write-Info "Stopping Node.js process using wizard directory (PID: $($proc.Id))..."
+                            Stop-Process -Id $proc.Id -Force
+                            Start-Sleep -Seconds 2
+                        }
+                    }
+                    catch {
+                        # Ignore errors
+                    }
+                }
+            }
+            
+            # Try to remove the directory
+            try {
+                if (Test-Path $targetWizardDir) {
+                    # First try to rename it (less likely to fail if locked)
+                    $tempName = "$targetWizardDir.old.$(Get-Date -Format 'yyyyMMddHHmmss')"
+                    Move-Item $targetWizardDir $tempName -Force -ErrorAction Stop
+                    Remove-Item $tempName -Recurse -Force -ErrorAction SilentlyContinue
+                }
+                $cleaned = $true
+                Write-Success "Cleaned up existing wizard directory"
+            }
+            catch {
+                if ($retryCount -lt $maxRetries) {
+                    Write-Warning "Directory still locked. Waiting before retry $retryCount/$maxRetries..."
+                    Start-Sleep -Seconds 3
+                }
+                else {
+                    Write-ErrorCustom "Cannot remove wizard directory after $maxRetries attempts: $($_.Exception.Message)"
+                    Write-Info "Please ensure no processes are using the directory and try again"
+                    throw "Cannot setup wizard - directory is locked"
+                }
+            }
         }
     }
     
