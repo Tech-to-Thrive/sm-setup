@@ -40,25 +40,29 @@ $VERSION = "1.0.0"
 function Write-Info { 
     param([string]$Message)
     Write-Host "[INFO] $Message" -ForegroundColor Cyan
-    Add-Content -Path $script:LogFile -Value "[$(Get-Date)] INFO: $Message"
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    Add-Content -Path $script:LogFile -Value "[$timestamp] INFO: $Message"
 }
 
 function Write-Success { 
     param([string]$Message)
     Write-Host "[SUCCESS] $Message" -ForegroundColor Green
-    Add-Content -Path $script:LogFile -Value "[$(Get-Date)] SUCCESS: $Message"
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    Add-Content -Path $script:LogFile -Value "[$timestamp] SUCCESS: $Message"
 }
 
 function Write-Warning { 
     param([string]$Message)
     Write-Host "[WARNING] $Message" -ForegroundColor Yellow
-    Add-Content -Path $script:LogFile -Value "[$(Get-Date)] WARNING: $Message"
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    Add-Content -Path $script:LogFile -Value "[$timestamp] WARNING: $Message"
 }
 
 function Write-ErrorCustom { 
     param([string]$Message)
     Write-Host "[ERROR] $Message" -ForegroundColor Red
-    Add-Content -Path $script:LogFile -Value "[$(Get-Date)] ERROR: $Message"
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    Add-Content -Path $script:LogFile -Value "[$timestamp] ERROR: $Message"
 }
 
 # Initialize logging in logs directory
@@ -74,7 +78,15 @@ if (-not (Test-Path $logsDir)) {
     New-Item -Path $logsDir -ItemType Directory -Force | Out-Null
 }
 
-$script:LogFile = Join-Path $logsDir "stack-masters-setup.log"
+# Create timestamped log filename
+$logTimestamp = Get-Date -Format "yyyyMMdd-HHmmss"
+$script:LogFile = Join-Path $logsDir "stack-masters-setup-$logTimestamp.log"
+
+# Write log header
+$timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+Add-Content -Path $script:LogFile -Value "================================================"
+Add-Content -Path $script:LogFile -Value "Stack Masters Setup Script - Started at $timestamp"
+Add-Content -Path $script:LogFile -Value "================================================"
 
 function Show-Help {
     $helpText = @"

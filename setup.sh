@@ -73,27 +73,34 @@ NC='\033[0m' # No Color
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOGS_DIR="$SCRIPT_DIR/logs"
 mkdir -p "$LOGS_DIR"
-LOGFILE="$LOGS_DIR/stack-masters-setup.log"
+# Create timestamped log filename
+LOG_TIMESTAMP=$(date '+%Y%m%d-%H%M%S')
+LOGFILE="$LOGS_DIR/stack-masters-setup-$LOG_TIMESTAMP.log"
+
+# Write log header
+echo "================================================" >> "$LOGFILE"
+echo "Stack Masters Setup Script - Started at $(date '+%Y-%m-%d %H:%M:%S')" >> "$LOGFILE"
+echo "================================================" >> "$LOGFILE"
 
 # Log functions
 log_info() {
     echo -e "${BLUE}[INFO]${NC} $1"
-    echo "[$(date)] INFO: $1" >> "$LOGFILE"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] INFO: $1" >> "$LOGFILE"
 }
 
 log_success() {
     echo -e "${GREEN}[SUCCESS]${NC} $1"
-    echo "[$(date)] SUCCESS: $1" >> "$LOGFILE"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] SUCCESS: $1" >> "$LOGFILE"
 }
 
 log_warning() {
     echo -e "${YELLOW}[WARNING]${NC} $1"
-    echo "[$(date)] WARNING: $1" >> "$LOGFILE"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] WARNING: $1" >> "$LOGFILE"
 }
 
 log_error() {
     echo -e "${RED}[ERROR]${NC} $1"
-    echo "[$(date)] ERROR: $1" >> "$LOGFILE"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: $1" >> "$LOGFILE"
 }
 
 # Check if running as root
@@ -870,8 +877,9 @@ start_provisioning_wizard() {
     
     log_info "Starting provisioning wizard on port 8080..."
     
-    # Start Node.js server in background
-    nohup node server-integrated.js > "$LOGS_DIR/wizard.log" 2>&1 &
+    # Start Node.js server in background with timestamped log
+    WIZARD_LOG_TIMESTAMP=$(date '+%Y%m%d-%H%M%S')
+    nohup node server-integrated.js > "$LOGS_DIR/wizard-$WIZARD_LOG_TIMESTAMP.log" 2>&1 &
     WIZARD_PID=$!
     
     # Save PID for potential cleanup
@@ -934,9 +942,8 @@ show_wizard_access_info() {
     echo "  - Configuring your environment"
     echo "  - Deploying your services"
     echo ""
-    echo "Log files:"
+    echo "Log file:"
     echo "  Setup: $LOGFILE"
-    echo "  Wizard: $LOGS_DIR/wizard.log"
     echo ""
 }
 
