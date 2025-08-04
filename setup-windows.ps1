@@ -61,13 +61,20 @@ function Write-ErrorCustom {
     Add-Content -Path $script:LogFile -Value "[$(Get-Date)] ERROR: $Message"
 }
 
-# Initialize logging in script directory
+# Initialize logging in logs directory
 $scriptDir = Split-Path -Parent $PSCommandPath
 if ([string]::IsNullOrEmpty($scriptDir)) {
     # Fallback for when running interactively
     $scriptDir = (Get-Location).Path
 }
-$script:LogFile = Join-Path $scriptDir "stack-masters-setup.log"
+
+# Create logs directory if it doesn't exist
+$logsDir = Join-Path $scriptDir "logs"
+if (-not (Test-Path $logsDir)) {
+    New-Item -Path $logsDir -ItemType Directory -Force | Out-Null
+}
+
+$script:LogFile = Join-Path $logsDir "stack-masters-setup.log"
 
 function Show-Help {
     $helpText = @"
@@ -865,8 +872,18 @@ function Test-SystemRequirements {
 function Setup-ProvisioningWizard {
     Write-Info "Setting up Stack Masters Provisioning Wizard..."
     
-    # Create wizard directory
-    $wizardDir = "C:\StackMasters\provisioning-wizard"
+    # Create wizard directory in run folder
+    $scriptDir = Split-Path -Parent $PSCommandPath
+    if ([string]::IsNullOrEmpty($scriptDir)) {
+        $scriptDir = (Get-Location).Path
+    }
+    
+    $runDir = Join-Path $scriptDir "run"
+    if (-not (Test-Path $runDir)) {
+        New-Item -Path $runDir -ItemType Directory -Force | Out-Null
+    }
+    
+    $wizardDir = Join-Path $runDir "provisioning-wizard"
     if (Test-Path $wizardDir) {
         Remove-Item -Path $wizardDir -Recurse -Force
     }

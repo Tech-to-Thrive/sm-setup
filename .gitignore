@@ -7,6 +7,10 @@ test-results/
 logs/
 *.tmp
 
+# Runtime files and directories
+run/
+runtime/
+
 # OS generated files
 .DS_Store
 .DS_Store?

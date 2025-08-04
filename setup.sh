@@ -69,21 +69,31 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
+# Initialize logging
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LOGS_DIR="$SCRIPT_DIR/logs"
+mkdir -p "$LOGS_DIR"
+LOGFILE="$LOGS_DIR/stack-masters-setup.log"
+
 # Log functions
 log_info() {
     echo -e "${BLUE}[INFO]${NC} $1"
+    echo "[$(date)] INFO: $1" >> "$LOGFILE"
 }
 
 log_success() {
     echo -e "${GREEN}[SUCCESS]${NC} $1"
+    echo "[$(date)] SUCCESS: $1" >> "$LOGFILE"
 }
 
 log_warning() {
     echo -e "${YELLOW}[WARNING]${NC} $1"
+    echo "[$(date)] WARNING: $1" >> "$LOGFILE"
 }
 
 log_error() {
     echo -e "${RED}[ERROR]${NC} $1"
+    echo "[$(date)] ERROR: $1" >> "$LOGFILE"
 }
 
 # Check if running as root
@@ -798,6 +808,136 @@ validate_system_requirements() {
         log_info "Please resolve the issues above and try again"
         return 1
     fi
+}
+
+# Setup provisioning wizard
+setup_provisioning_wizard() {
+    log_info "Setting up Stack Masters Provisioning Wizard..."
+    
+    # Create wizard directory in run folder
+    RUN_DIR="$SCRIPT_DIR/run"
+    mkdir -p "$RUN_DIR"
+    
+    WIZARD_DIR="$RUN_DIR/provisioning-wizard"
+    if [ -d "$WIZARD_DIR" ]; then
+        rm -rf "$WIZARD_DIR"
+    fi
+    mkdir -p "$WIZARD_DIR"
+    
+    # Copy provisioning web app
+    SOURCE_DIR="$SCRIPT_DIR/apps/provisioning-web"
+    if [ ! -d "$SOURCE_DIR" ]; then
+        log_error "Provisioning web app not found at: $SOURCE_DIR"
+        exit 1
+    fi
+    
+    cp -r "$SOURCE_DIR"/* "$WIZARD_DIR/"
+    log_success "Provisioning wizard copied successfully"
+}
+
+# Start provisioning wizard
+start_provisioning_wizard() {
+    log_info "Starting Stack Masters Provisioning Wizard..."
+    
+    WIZARD_DIR="$SCRIPT_DIR/run/provisioning-wizard"
+    BACKEND_DIR="$WIZARD_DIR/backend"
+    
+    if [ ! -d "$BACKEND_DIR" ]; then
+        log_error "Backend directory not found: $BACKEND_DIR"
+        exit 1
+    fi
+    
+    # Install dependencies
+    log_info "Installing dependencies..."
+    cd "$BACKEND_DIR"
+    
+    if ! npm install --production >/dev/null 2>&1; then
+        log_error "npm install failed"
+        exit 1
+    fi
+    
+    # Determine host binding based on environment
+    if [ "$OS_TYPE" = "server" ]; then
+        HOST_BINDING="0.0.0.0"
+    else
+        HOST_BINDING="localhost"
+    fi
+    
+    # Set environment variables and start server in background
+    export HOST="$HOST_BINDING"
+    export PORT="8080"
+    export NODE_ENV="production"
+    
+    log_info "Starting provisioning wizard on port 8080..."
+    
+    # Start Node.js server in background
+    nohup node server-integrated.js > "$LOGS_DIR/wizard.log" 2>&1 &
+    WIZARD_PID=$!
+    
+    # Save PID for potential cleanup
+    echo "$WIZARD_PID" > "$WIZARD_DIR/wizard.pid"
+    log_info "Provisioning wizard started with PID: $WIZARD_PID"
+    
+    # Wait for server to be ready
+    log_info "Waiting for server to be ready..."
+    sleep 8
+    
+    # Test if server is accessible
+    if curl -s "http://$HOST_BINDING:8080" >/dev/null 2>&1; then
+        log_success "Provisioning wizard is running!"
+    else
+        log_warning "Server may still be starting up. Check manually if needed."
+    fi
+    
+    # Display access information
+    show_wizard_access_info "$HOST_BINDING"
+    
+    cd "$SCRIPT_DIR"
+}
+
+# Show wizard access information
+show_wizard_access_info() {
+    local host_binding="$1"
+    
+    echo ""
+    echo "========================================"
+    echo "Stack Masters Provisioning Wizard"
+    echo "========================================"
+    echo ""
+    echo "Access the wizard at:"
+    
+    if [ "$host_binding" = "localhost" ]; then
+        echo "  http://localhost:8080"
+    else
+        echo "  http://localhost:8080"
+        echo ""
+        echo "From a remote machine:"
+        
+        # Show network interfaces for remote access
+        if command -v ip >/dev/null 2>&1; then
+            ip -4 addr show | grep inet | grep -v 127.0.0.1 | awk '{print $2}' | cut -d/ -f1 | while read -r ip; do
+                echo "  http://$ip:8080"
+            done
+        elif command -v hostname >/dev/null 2>&1; then
+            local_ip=$(hostname -I | awk '{print $1}')
+            if [ -n "$local_ip" ]; then
+                echo "  http://$local_ip:8080"
+            fi
+        else
+            echo "  http://YOUR-SERVER-IP:8080"
+        fi
+    fi
+    
+    echo ""
+    echo "The wizard will guide you through:"
+    echo "  - Selecting your Stack Masters repository"
+    echo "  - Configuring your environment"
+    echo "  - Deploying your services"
+    echo ""
+    echo "Log files:"
+    echo "  Setup: $LOGFILE"
+    echo "  Wizard: $LOGS_DIR/wizard.log"
+    echo ""
 }
 
 # Main installation flow
