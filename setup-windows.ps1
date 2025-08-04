@@ -729,6 +729,33 @@ function Start-ProvisioningWizard {
         }
     }
     
+    # Validate Node.js installation
+    Write-Info "Validating Node.js installation..."
+    try {
+        $nodeVersion = & node --version 2>&1
+        Write-Info "Node.js version: $nodeVersion"
+    }
+    catch {
+        Write-ErrorCustom "Node.js validation failed: $($_.Exception.Message)"
+        throw
+    }
+    
+    # Check if npm is available
+    if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
+        Write-ErrorCustom "npm is not available. Please ensure Node.js installation includes npm."
+        throw "npm not found"
+    }
+    
+    # Validate npm
+    try {
+        $npmVersion = & npm --version 2>&1
+        Write-Info "npm version: $npmVersion"
+    }
+    catch {
+        Write-ErrorCustom "npm validation failed: $($_.Exception.Message)"
+        throw
+    }
+    
     # Navigate to backend directory
     $backendDir = Join-Path $WizardDir "backend"
     if (-not (Test-Path $backendDir)) {
@@ -736,10 +763,32 @@ function Start-ProvisioningWizard {
         throw "Backend directory not found"
     }
     
-    Set-Location $backendDir
+    # Save current location
+    $originalLocation = Get-Location
     
-    Write-Info "Installing dependencies..."
-    & npm install --production
+    try {
+        Set-Location $backendDir
+        
+        Write-Info "Installing dependencies..."
+        Write-Info "Working directory: $backendDir"
+        
+        # Use cmd.exe to run npm to avoid PowerShell parsing issues
+        $npmCmd = "npm install --production"
+        Write-Info "Running: $npmCmd"
+        
+        $result = & cmd.exe /c $npmCmd 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            Write-ErrorCustom "npm install failed with exit code: $LASTEXITCODE"
+            Write-ErrorCustom "Output: $result"
+            throw "npm install failed"
+        }
+        
+        Write-Success "Dependencies installed successfully"
+    }
+    catch {
+        Set-Location $originalLocation
+        throw
+    }
     
     # Set environment variables
     # PROJECT_ROOT will be set after cloning via web wizard
@@ -755,9 +804,13 @@ function Start-ProvisioningWizard {
     # Start the backend server in detached mode
     Write-Info "Starting Node.js server in background..."
     
+    # Get the full path to node.exe
+    $nodeExe = (Get-Command node).Source
+    Write-Info "Using Node.js from: $nodeExe"
+    
     # Create a detached process that survives script termination
     $processStartInfo = New-Object System.Diagnostics.ProcessStartInfo
-    $processStartInfo.FileName = "node"
+    $processStartInfo.FileName = $nodeExe
     $processStartInfo.Arguments = "server-integrated.js"
     $processStartInfo.WorkingDirectory = $backendDir
     $processStartInfo.UseShellExecute = $false
@@ -765,7 +818,17 @@ function Start-ProvisioningWizard {
     $processStartInfo.RedirectStandardOutput = $false
     $processStartInfo.RedirectStandardError = $false
     
-    $process = [System.Diagnostics.Process]::Start($processStartInfo)
+    try {
+        $process = [System.Diagnostics.Process]::Start($processStartInfo)
+        if ($null -eq $process) {
+            throw "Failed to start Node.js process"
+        }
+    }
+    catch {
+        Write-ErrorCustom "Failed to start Node.js server: $($_.Exception.Message)"
+        Set-Location $originalLocation
+        throw
+    }
     
     Write-Info "Provisioning wizard started with PID: $($process.Id)"
     Write-Info "Waiting for server to be ready..."
@@ -815,6 +878,9 @@ function Start-ProvisioningWizard {
     Write-Host "  - Configuring your environment" -ForegroundColor White
     Write-Host "  - Deploying your services" -ForegroundColor White
     Write-Host ""
+    
+    # Return to original location
+    Set-Location $originalLocation
 }
 
 # Repository cloning is now handled by the web wizard
