@@ -590,87 +590,63 @@ start_provisioning_wizard() {
         exit 1
     fi
     
-    cd "$WIZARD_DIR"
-    
-    # Check for different ways to run the app
-    DOCKER_COMPOSE_FILE=""
-    if [ -f "docker-compose.yml" ]; then
-        DOCKER_COMPOSE_FILE="docker-compose.yml"
-    elif [ -f "docker-compose.yaml" ]; then
-        DOCKER_COMPOSE_FILE="docker-compose.yaml"
-    fi
-    
-    # Default port (may be overridden by docker-compose or package.json)
-    WIZARD_PORT=8080
-    
-    if [ -n "$DOCKER_COMPOSE_FILE" ]; then
-        log_info "Starting provisioning wizard with Docker Compose..."
+    # Check if Node.js is available
+    if ! command -v node &> /dev/null; then
+        log_info "Node.js not found. Installing Node.js..."
         
-        # Use docker compose (v2) or docker-compose (v1)
-        if command -v docker &> /dev/null && docker compose version &> /dev/null; then
-            DOCKER_COMPOSE_CMD="docker compose"
-        else
-            DOCKER_COMPOSE_CMD="docker-compose"
-        fi
+        # Install Node.js based on package manager
+        case $PKG_MANAGER in
+            apt)
+                curl -fsSL https://deb.nodesource.com/setup_lts.x | bash -
+                apt-get install -y nodejs
+                ;;
+            yum|dnf)
+                curl -fsSL https://rpm.nodesource.com/setup_lts.x | bash -
+                $PKG_INSTALL nodejs
+                ;;
+            pacman)
+                pacman -S nodejs npm --noconfirm
+                ;;
+            zypper)
+                zypper install -y nodejs npm
+                ;;
+        esac
         
-        # Set environment variables for docker-compose
-        export CLONE_DIR="$CLONE_DIR"
-        export PROJECT_ROOT="/project"
-        
-        $DOCKER_COMPOSE_CMD up -d
-        
-        # Wait for the service to be ready
-        log_info "Waiting for provisioning wizard to start..."
-        sleep 10
-        
-        # Try to extract port from docker-compose file
-        if grep -E '(ports:|expose:)' "$DOCKER_COMPOSE_FILE" | grep -oE '[0-9]+:' | head -1 | grep -oE '[0-9]+' > /dev/null; then
-            WIZARD_PORT=$(grep -E '(ports:|expose:)' "$DOCKER_COMPOSE_FILE" | grep -oE '[0-9]+:' | head -1 | grep -oE '[0-9]+')
-        fi
-    elif [ -f "Dockerfile" ]; then
-        log_info "Building and running provisioning wizard with Docker..."
-        
-        # Build the Docker image
-        docker build -t stack-masters-wizard .
-        
-        # Run the container with mounted repository
-        docker run -d \
-            -p ${WIZARD_PORT}:${WIZARD_PORT} \
-            -v "${CLONE_DIR}:/project:rw" \
-            -v /var/run/docker.sock:/var/run/docker.sock \
-            -e "PROJECT_ROOT=/project" \
-            --name stack-masters-wizard \
-            stack-masters-wizard
-        
-        log_info "Waiting for provisioning wizard to start..."
-        sleep 10
-    elif [ -f "package.json" ]; then
-        # Check if Node.js is available
-        if command -v npm &> /dev/null; then
-            log_info "Installing Node.js dependencies..."
-            npm install
-            
-            # Check for port in package.json scripts
-            if grep -E '"start".*PORT=[0-9]+' package.json > /dev/null; then
-                WIZARD_PORT=$(grep -E '"start".*PORT=[0-9]+' package.json | grep -oE 'PORT=[0-9]+' | grep -oE '[0-9]+')
-            fi
-            
-            log_info "Starting provisioning wizard with npm..."
-            PORT=$WIZARD_PORT npm start &
-            WIZARD_PID=$!
-            echo $WIZARD_PID > /tmp/provisioning-wizard.pid
-            log_info "Provisioning wizard started with PID: $WIZARD_PID"
-            
-            log_info "Waiting for provisioning wizard to start..."
-            sleep 5
-        else
-            log_error "Node.js/npm not found. Please install Node.js or ensure Docker is available."
+        if ! command -v node &> /dev/null; then
+            log_error "Failed to install Node.js"
             exit 1
         fi
-    else
-        log_error "No suitable method found to run provisioning wizard (no docker-compose.yml, Dockerfile, or package.json)"
+    fi
+    
+    # Navigate to backend directory
+    BACKEND_DIR="$WIZARD_DIR/backend"
+    if [ ! -d "$BACKEND_DIR" ]; then
+        log_error "Backend directory not found: $BACKEND_DIR"
         exit 1
     fi
+    
+    cd "$BACKEND_DIR"
+    
+    log_info "Installing dependencies..."
+    npm install --production
+    
+    # Set environment variables
+    export PROJECT_ROOT="$CLONE_DIR"
+    export PORT="8080"
+    export NODE_ENV="production"
+    
+    log_info "Starting provisioning wizard on port 8080..."
+    
+    # Start the backend server
+    node server-integrated.js &
+    WIZARD_PID=$!
+    
+    # Save PID for potential cleanup
+    echo $WIZARD_PID > "$WIZARD_DIR/wizard.pid"
+    
+    log_info "Provisioning wizard started with PID: $WIZARD_PID"
+    log_info "Waiting for server to be ready..."
+    sleep 5
     
     # Display access information
     log_success "Provisioning wizard is running!"

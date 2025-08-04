@@ -443,7 +443,7 @@ function Configure-Firewall {
 function Configure-ServerFirewall {
     Write-Info "Configuring Windows Firewall for server deployment..."
     
-    [int[]]$ports = @(80, 443, 8080, 3000, 3001, 3002, 5678, 9090, 9999, 587, 465)
+    [int[]]$ports = @(80, 443, 8080, 3000, 3001, 3002, 5678, 9090, 9999, 587, 465)  # 8080 is for provisioning wizard
     
     foreach ($port in $ports) {
         $currentPort = $port
@@ -629,90 +629,51 @@ function Start-ProvisioningWizard {
         throw "Provisioning wizard directory not found"
     }
     
-    Set-Location $WizardDir
-    
-    # Check for different ways to run the app
-    $dockerComposeFile = Join-Path $WizardDir "docker-compose.yml"
-    $dockerComposeYamlFile = Join-Path $WizardDir "docker-compose.yaml"
-    $dockerFile = Join-Path $WizardDir "Dockerfile"
-    $packageJson = Join-Path $WizardDir "package.json"
-    
-    # Default port (may be overridden by docker-compose or package.json)
-    $wizardPort = 8080
-    
-    if ((Test-Path $dockerComposeFile) -or (Test-Path $dockerComposeYamlFile)) {
-        $composeFile = if (Test-Path $dockerComposeFile) { $dockerComposeFile } else { $dockerComposeYamlFile }
-        Write-Info "Starting provisioning wizard with Docker Compose..."
-        
-        # Use docker compose (v2) or docker-compose (v1)
-        $dockerComposeCmd = if (Get-Command "docker" -ErrorAction SilentlyContinue) {
-            $dockerVersion = & docker compose version 2>&1
-            if ($?) { "docker compose" } else { "docker-compose" }
-        } else { "docker-compose" }
-        
-        # Set environment variables for docker-compose
-        $env:CLONE_DIR = $CloneDir
-        $env:PROJECT_ROOT = "/project"
-        
-        & $dockerComposeCmd up -d
-        
-        # Wait for the service to be ready
-        Write-Info "Waiting for provisioning wizard to start..."
-        Start-Sleep -Seconds 10
-        
-        # Try to extract port from docker-compose file
-        $composeContent = Get-Content $composeFile -Raw
-        if ($composeContent -match '(?:ports:|expose:)[\s\S]*?-\s*"?(\d+):') {
-            $wizardPort = $matches[1]
-        }
-    }
-    elseif (Test-Path $dockerFile) {
-        Write-Info "Building and running provisioning wizard with Docker..."
-        
-        # Build the Docker image
-        & docker build -t stack-masters-wizard .
-        
-        # Run the container with mounted repository
-        & docker run -d `
-            -p "${wizardPort}:${wizardPort}" `
-            -v "${CloneDir}:/project:rw" `
-            -v /var/run/docker.sock:/var/run/docker.sock `
-            -e "PROJECT_ROOT=/project" `
-            --name stack-masters-wizard `
-            stack-masters-wizard
-        
-        Write-Info "Waiting for provisioning wizard to start..."
-        Start-Sleep -Seconds 10
-    }
-    elseif (Test-Path $packageJson) {
-        # Check if Node.js is available
-        if (Get-Command npm -ErrorAction SilentlyContinue) {
-            Write-Info "Installing Node.js dependencies..."
-            & npm install
-            
-            # Check for port in package.json scripts
-            $packageContent = Get-Content $packageJson | ConvertFrom-Json
-            if ($packageContent.scripts.start -match 'PORT=(\d+)') {
-                $wizardPort = $matches[1]
+    # Check if Node.js is available
+    if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+        Write-Info "Node.js not found. Installing Node.js..."
+        try {
+            & winget install --id OpenJS.NodeJS --exact --silent --accept-package-agreements --accept-source-agreements
+            Update-Path
+            if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+                throw "Node.js installation completed but node command not found"
             }
-            
-            Write-Info "Starting provisioning wizard with npm..."
-            $env:PORT = $wizardPort
-            $process = Start-Process npm -ArgumentList "start" -PassThru -WindowStyle Hidden
-            Write-Info "Provisioning wizard started with PID: $($process.Id)"
-            
-            Write-Info "Waiting for provisioning wizard to start..."
-            Start-Sleep -Seconds 5
         }
-        else {
-            Write-ErrorCustom "Node.js/npm not found. Please install Node.js or ensure Docker is available."
-            throw "Node.js not found"
+        catch {
+            Write-ErrorCustom "Failed to install Node.js: $($_.Exception.Message)"
+            throw
         }
     }
-    else {
-        Write-ErrorCustom "No suitable method found to run provisioning wizard (no docker-compose.yml, Dockerfile, or package.json)"
-        throw "Cannot start provisioning wizard"
+    
+    # Navigate to backend directory
+    $backendDir = Join-Path $WizardDir "backend"
+    if (-not (Test-Path $backendDir)) {
+        Write-ErrorCustom "Backend directory not found: $backendDir"
+        throw "Backend directory not found"
     }
+    
+    Set-Location $backendDir
+    
+    Write-Info "Installing dependencies..."
+    & npm install --production
+    
+    # Set environment variables
+    $env:PROJECT_ROOT = $CloneDir
+    $env:PORT = "8080"
+    $env:NODE_ENV = "production"
+    
+    Write-Info "Starting provisioning wizard on port 8080..."
+    
+    # Start the backend server
+    $process = Start-Process node -ArgumentList "server-integrated.js" -PassThru -WindowStyle Hidden
+    
+    Write-Info "Provisioning wizard started with PID: $($process.Id)"
+    Write-Info "Waiting for server to be ready..."
+    Start-Sleep -Seconds 5
+    
+    # Save PID for potential cleanup
+    $pidFile = Join-Path $WizardDir "wizard.pid"
+    Set-Content -Path $pidFile -Value $process.Id
     
     # Display access information
     Write-Success "Provisioning wizard is running!"
