@@ -319,14 +319,15 @@ class DeploymentExecutor {
           logs: [],
           error: null,
           progress: 0,
-        startTime: null,
+          startTime: null,
+          endTime: null,
+          duration: null
+        })),
+        startTime: new Date().toISOString(),
         endTime: null,
-        duration: null
-      })),
-      startTime: new Date().toISOString(),
-      endTime: null,
-      config: this.sanitizeConfig(config)
-    };
+        config: this.sanitizeConfig(config)
+      };
+    }
   }
 
   sanitizeConfig(config) {
