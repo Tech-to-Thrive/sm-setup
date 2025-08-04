@@ -237,7 +237,6 @@ function Stop-ExistingWizard {
     
     # Method 3: Clean up any node processes in our directories
     $wizardDirs = @(
-        "C:\StackMasters\provisioning-wizard",
         (Join-Path $scriptDir "run\provisioning-wizard")
     )
     
@@ -263,8 +262,7 @@ function Stop-ExistingWizard {
     
     # Method 4: Clean up locked directories
     $lockedDirs = @(
-        (Join-Path $scriptDir "run\provisioning-wizard\backend"),
-        "C:\StackMasters\provisioning-wizard\backend"
+        (Join-Path $scriptDir "run\provisioning-wizard\backend")
     )
     
     foreach ($dir in $lockedDirs) {
@@ -667,29 +665,39 @@ function Setup-ProvisioningWizard {
         $scriptDir = (Get-Location).Path
     }
     
+    # Create run directory in the script directory
+    $runDir = Join-Path $scriptDir "run"
+    if (-not (Test-Path $runDir)) {
+        New-Item -Path $runDir -ItemType Directory -Force | Out-Null
+    }
+    
+    # Target directory for the wizard in the run folder
+    $targetWizardDir = Join-Path $runDir "provisioning-wizard"
+    
     # Source provisioning-web is included in this repository
     $sourceWizardDir = Join-Path $scriptDir "apps\provisioning-web"
-    
-    # Target directory for the wizard
-    $targetWizardDir = "C:\StackMasters\provisioning-wizard"
     
     if (-not (Test-Path $sourceWizardDir)) {
         Write-ErrorCustom "Provisioning wizard source not found at: $sourceWizardDir"
         throw "Provisioning wizard source not found"
     }
     
-    # Create StackMasters directory if it doesn't exist
-    $null = New-Item -ItemType Directory -Force -Path "C:\StackMasters"
-    
     if (Test-Path $targetWizardDir) {
         $backupDir = "$targetWizardDir.backup.$(Get-Date -Format 'yyyyMMddHHmmss')"
         Write-Warning "Directory $targetWizardDir already exists. Backing up to $backupDir..."
-        Move-Item $targetWizardDir $backupDir
+        try {
+            Move-Item $targetWizardDir $backupDir -Force
+        }
+        catch {
+            Write-Warning "Could not backup existing directory. Removing it instead."
+            Remove-Item $targetWizardDir -Recurse -Force
+        }
     }
     
     Write-Info "Copying provisioning wizard to $targetWizardDir..."
     try {
-        Copy-Item -Path $sourceWizardDir -Destination $targetWizardDir -Recurse -Force
+        New-Item -Path $targetWizardDir -ItemType Directory -Force | Out-Null
+        Copy-Item -Path "$sourceWizardDir\*" -Destination $targetWizardDir -Recurse -Force
         Write-Success "Provisioning wizard copied successfully"
     }
     catch {
