@@ -865,14 +865,29 @@ function Start-ProvisioningWizard {
         Write-Info "Installing dependencies..."
         Write-Info "Working directory: $backendDir"
         
-        # Use cmd.exe to run npm to avoid PowerShell parsing issues
-        $npmCmd = "npm install --production"
-        Write-Info "Running: $npmCmd"
+        # Create a simple batch file to run npm install
+        # This avoids all the PowerShell execution policy and parsing issues
+        $batchFile = Join-Path $env:TEMP "npm_install_$(Get-Random).bat"
+        $batchContent = @"
+@echo off
+cd /d "$backendDir"
+call npm install --production
+exit /b %ERRORLEVEL%
+"@
         
-        $result = & cmd.exe /c $npmCmd 2>&1
-        if ($LASTEXITCODE -ne 0) {
-            Write-ErrorCustom "npm install failed with exit code: $LASTEXITCODE"
-            Write-ErrorCustom "Output: $result"
+        Set-Content -Path $batchFile -Value $batchContent -Encoding ASCII
+        
+        Write-Info "Running npm install via batch file..."
+        
+        # Execute the batch file
+        $process = Start-Process -FilePath "cmd.exe" -ArgumentList "/c `"$batchFile`"" -Wait -NoNewWindow -PassThru
+        $exitCode = $process.ExitCode
+        
+        # Clean up
+        Remove-Item $batchFile -Force -ErrorAction SilentlyContinue
+        
+        if ($exitCode -ne 0) {
+            Write-ErrorCustom "npm install failed with exit code: $exitCode"
             throw "npm install failed"
         }
         
