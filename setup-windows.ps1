@@ -913,30 +913,61 @@ exit /b %ERRORLEVEL%
     # Start the backend server in detached mode
     Write-Info "Starting Node.js server in background..."
     
-    # Get the full path to node.exe
-    $nodeExe = (Get-Command node).Source
-    Write-Info "Using Node.js from: $nodeExe"
+    # Create a batch file to start the Node.js server
+    # This ensures proper execution regardless of Node.js installation method
+    $startBatchFile = Join-Path $WizardDir "start-wizard.bat"
+    $startBatchContent = @"
+@echo off
+cd /d "$backendDir"
+set PORT=$($env:PORT)
+set NODE_ENV=$($env:NODE_ENV)
+set HOST=$($env:HOST)
+start /b node server-integrated.js > wizard.log 2>&1
+echo %ERRORLEVEL% > wizard.pid
+"@
     
-    # Create a detached process that survives script termination
-    $processStartInfo = New-Object System.Diagnostics.ProcessStartInfo
-    $processStartInfo.FileName = $nodeExe
-    $processStartInfo.Arguments = "server-integrated.js"
-    $processStartInfo.WorkingDirectory = $backendDir
-    $processStartInfo.UseShellExecute = $false
-    $processStartInfo.CreateNoWindow = $true
-    $processStartInfo.RedirectStandardOutput = $false
-    $processStartInfo.RedirectStandardError = $false
+    Set-Content -Path $startBatchFile -Value $startBatchContent -Encoding ASCII
     
-    try {
-        $process = [System.Diagnostics.Process]::Start($processStartInfo)
-        if ($null -eq $process) {
-            throw "Failed to start Node.js process"
-        }
-    }
-    catch {
-        Write-ErrorCustom "Failed to start Node.js server: $($_.Exception.Message)"
+    Write-Info "Starting Node.js server..."
+    
+    # Start the server using the batch file
+    $process = Start-Process -FilePath "cmd.exe" -ArgumentList "/c `"$startBatchFile`"" -WindowStyle Hidden -PassThru
+    
+    if ($null -eq $process) {
+        Write-ErrorCustom "Failed to start Node.js server"
         Set-Location $originalLocation
-        throw
+        throw "Failed to start Node.js process"
+    }
+    
+    # The batch file starts node in background, so we need to find the actual node process
+    Start-Sleep -Seconds 3
+    
+    # Find the node process on our port
+    $nodeProcess = $null
+    $retries = 0
+    while ($null -eq $nodeProcess -and $retries -lt 5) {
+        try {
+            $tcpConnection = Get-NetTCPConnection -LocalPort $env:PORT -State Listen -ErrorAction SilentlyContinue
+            if ($tcpConnection) {
+                $nodeProcess = Get-Process -Id $tcpConnection.OwningProcess -ErrorAction SilentlyContinue
+                if ($nodeProcess) {
+                    Write-Info "Node.js server started with PID: $($nodeProcess.Id)"
+                    # Save the actual node process PID
+                    $pidFile = Join-Path $WizardDir "wizard.pid"
+                    Set-Content -Path $pidFile -Value $nodeProcess.Id
+                    break
+                }
+            }
+        }
+        catch {
+            # Ignore errors
+        }
+        $retries++
+        Start-Sleep -Seconds 2
+    }
+    
+    if ($null -eq $nodeProcess) {
+        Write-Warning "Could not verify Node.js process, but it may still be starting..."
     }
     
     Write-Info "Provisioning wizard started with PID: $($process.Id)"
