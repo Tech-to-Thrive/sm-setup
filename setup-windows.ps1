@@ -1053,6 +1053,102 @@ function Clone-Repository {
 }
 #>
 
+function Stop-ExistingWizard {
+    Write-Info "Checking for existing wizard processes..."
+    
+    # Check if port 58217 is in use
+    $tcpConnection = Get-NetTCPConnection -LocalPort 58217 -ErrorAction SilentlyContinue
+    if ($tcpConnection) {
+        Write-Warning "Port 58217 is in use. Attempting to stop existing wizard..."
+        
+        # Try to identify the process using the port
+        foreach ($conn in $tcpConnection) {
+            try {
+                $process = Get-Process -Id $conn.OwningProcess -ErrorAction SilentlyContinue
+                if ($process) {
+                    Write-Info "Found process using port 58217: $($process.Name) (PID: $($process.Id))"
+                    
+                    # If it's a node process, likely our wizard
+                    if ($process.Name -eq "node" -or $process.Name -eq "node.exe") {
+                        Write-Info "Stopping Node.js wizard process..."
+                        Stop-Process -Id $process.Id -Force
+                        Write-Success "Wizard process stopped"
+                        
+                        # Wait a moment for port to be released
+                        Start-Sleep -Seconds 2
+                    }
+                    else {
+                        Write-Warning "Port 58217 is used by: $($process.Name)"
+                        Write-Warning "Please close this application manually or choose a different port"
+                    }
+                }
+            }
+            catch {
+                Write-Warning "Could not identify process using port 58217"
+            }
+        }
+    }
+    
+    # Also check for any node processes in our wizard directory
+    $scriptDir = Split-Path -Parent $PSCommandPath
+    if ([string]::IsNullOrEmpty($scriptDir)) {
+        $scriptDir = (Get-Location).Path
+    }
+    
+    $wizardDirs = @(
+        (Join-Path $scriptDir "run\provisioning-wizard"),
+        (Join-Path $scriptDir "apps\provisioning-web")
+    )
+    
+    $nodeProcesses = @(Get-Process -Name "node" -ErrorAction SilentlyContinue)
+    if ($nodeProcesses.Count -gt 0) {
+        foreach ($proc in $nodeProcesses) {
+            try {
+                # Get the command line to check if it's our wizard
+                $commandLine = (Get-WmiObject Win32_Process -Filter "ProcessId = $($proc.Id)").CommandLine
+                
+                foreach ($wizardDir in $wizardDirs) {
+                    if ($commandLine -and $commandLine.Contains($wizardDir)) {
+                        Write-Info "Found wizard process: PID $($proc.Id)"
+                        Stop-Process -Id $proc.Id -Force
+                        Write-Success "Stopped wizard process"
+                    }
+                }
+            }
+            catch {
+                # Ignore errors in process inspection
+            }
+        }
+    }
+    
+    # Clean up any PID files
+    foreach ($wizardDir in $wizardDirs) {
+        $pidFiles = @(
+            (Join-Path $wizardDir "wizard.pid"),
+            (Join-Path $wizardDir "backend\wizard.pid")
+        )
+        
+        foreach ($pidFile in $pidFiles) {
+            if (Test-Path $pidFile) {
+                try {
+                    $pid = Get-Content $pidFile -Raw
+                    if ($pid -match '^\d+$') {
+                        $process = Get-Process -Id $pid -ErrorAction SilentlyContinue
+                        if ($process) {
+                            Write-Info "Stopping process from PID file: $pid"
+                            Stop-Process -Id $pid -Force
+                        }
+                    }
+                    Remove-Item $pidFile -Force
+                }
+                catch {
+                    # Ignore errors
+                }
+            }
+        }
+    }
+}
+
 function Test-SystemRequirements {
     Write-Info "Running comprehensive system validation..."
     
@@ -1895,6 +1991,9 @@ function Main {
     
     # Configure system
     Configure-Firewall
+    
+    # Stop any existing wizard processes to free up port 58217
+    Stop-ExistingWizard
     
     # Run comprehensive system validation
     Write-Info "Performing system validation..."
