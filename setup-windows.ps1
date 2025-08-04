@@ -1647,24 +1647,41 @@ function Start-ProvisioningWizard {
             
             # Check if server is responding - try multiple endpoints
             try {
-                # Try health endpoint first
-                $healthResponse = Invoke-WebRequest -Uri "http://$hostBinding:58217/api/health" -TimeoutSec 2 -ErrorAction SilentlyContinue
-                if ($healthResponse.StatusCode -eq 200) {
+                # Try root endpoint (health endpoint requires auth)
+                $rootResponse = Invoke-WebRequest -Uri "http://localhost:58217/" -TimeoutSec 2 -UseBasicParsing -ErrorAction Stop
+                if ($rootResponse.StatusCode -eq 200) {
                     $processStarted = $true
                     break
                 }
             }
             catch {
-                # Health endpoint might require auth, try the root endpoint
+                # Check the specific error
+                if ($_.Exception.Response) {
+                    $statusCode = [int]$_.Exception.Response.StatusCode
+                    # 401 Unauthorized means server is running but requires auth - that's fine!
+                    if ($statusCode -eq 401 -or $statusCode -eq 403) {
+                        $processStarted = $true
+                        Write-Success "Server is responding (authentication required)"
+                        break
+                    }
+                }
+                # Also try the health endpoint
                 try {
-                    $rootResponse = Invoke-WebRequest -Uri "http://$hostBinding:58217/" -TimeoutSec 2 -ErrorAction SilentlyContinue
-                    if ($rootResponse.StatusCode -eq 200 -or $rootResponse.StatusCode -eq 401 -or $rootResponse.StatusCode -eq 403) {
-                        # Server is responding (even if it returns auth errors, that means it's running)
+                    $healthResponse = Invoke-WebRequest -Uri "http://localhost:58217/api/health" -TimeoutSec 2 -UseBasicParsing -ErrorAction Stop
+                    if ($healthResponse.StatusCode -eq 200) {
                         $processStarted = $true
                         break
                     }
                 }
                 catch {
+                    if ($_.Exception.Response) {
+                        $statusCode = [int]$_.Exception.Response.StatusCode
+                        if ($statusCode -eq 401 -or $statusCode -eq 403) {
+                            $processStarted = $true
+                            Write-Success "Server is responding (health endpoint requires auth)"
+                            break
+                        }
+                    }
                     # Still starting up, continue waiting
                 }
             }
@@ -1867,6 +1884,21 @@ function Test-WizardDiagnostics {
 function Show-WizardAccessInfo {
     param([string]$HostBinding)
     
+    # Try to extract token from wizard output log
+    $tokenInfo = $null
+    try {
+        $wizardOutputLog = Join-Path $logsDir "wizard-output.log"
+        if (Test-Path $wizardOutputLog) {
+            $logContent = Get-Content $wizardOutputLog -Raw
+            if ($logContent -match 'Token:\s*([a-f0-9]{64})') {
+                $tokenInfo = $matches[1]
+            }
+        }
+    }
+    catch {
+        # Ignore token extraction errors
+    }
+    
     Write-Host ""
     Write-Host "========================================" -ForegroundColor Green
     Write-Host "   Stack Masters Provisioning Wizard" -ForegroundColor Green
@@ -1874,14 +1906,19 @@ function Show-WizardAccessInfo {
     Write-Host ""
     Write-Host "✅ Wizard is running successfully!" -ForegroundColor Green
     Write-Host ""
-    Write-Host "Access the wizard at:" -ForegroundColor Cyan
     
-    if ($HostBinding -eq "localhost") {
-        Write-Host "  🌐 http://localhost:58217" -ForegroundColor Yellow
+    if ($tokenInfo) {
+        Write-Host "🔐 Security Token Required" -ForegroundColor Yellow
+        Write-Host ""
+        Write-Host "Access the wizard at:" -ForegroundColor Cyan
+        Write-Host "  🌐 http://localhost:58217/?token=$tokenInfo" -ForegroundColor Yellow
     }
     else {
+        Write-Host "Access the wizard at:" -ForegroundColor Cyan
         Write-Host "  🌐 http://localhost:58217" -ForegroundColor Yellow
-        
+    }
+    
+    if ($HostBinding -ne "localhost") {
         # Show network interfaces for remote access
         try {
             $networkAdapters = Get-NetIPAddress -AddressFamily IPv4 | Where-Object { 
@@ -1892,7 +1929,12 @@ function Show-WizardAccessInfo {
                 Write-Host ""
                 Write-Host "Remote access URLs:" -ForegroundColor Cyan
                 foreach ($adapter in $networkAdapters) {
-                    Write-Host "  🌐 http://$($adapter.IPAddress):58217" -ForegroundColor Yellow
+                    if ($tokenInfo) {
+                        Write-Host "  🌐 http://$($adapter.IPAddress):58217/?token=$tokenInfo" -ForegroundColor Yellow
+                    }
+                    else {
+                        Write-Host "  🌐 http://$($adapter.IPAddress):58217" -ForegroundColor Yellow
+                    }
                 }
             }
         }
@@ -1900,7 +1942,12 @@ function Show-WizardAccessInfo {
             # Fallback if network detection fails
             Write-Host ""
             Write-Host "Remote access:" -ForegroundColor Cyan
-            Write-Host "  🌐 http://YOUR-SERVER-IP:58217" -ForegroundColor Yellow
+            if ($tokenInfo) {
+                Write-Host "  🌐 http://YOUR-SERVER-IP:58217/?token=$tokenInfo" -ForegroundColor Yellow
+            }
+            else {
+                Write-Host "  🌐 http://YOUR-SERVER-IP:58217" -ForegroundColor Yellow
+            }
         }
     }
     
