@@ -950,22 +950,31 @@ function Start-ProvisioningWizard {
         
         Write-Info "Starting provisioning wizard on port 8080..."
         
-        # Create a persistent CMD process to run Node.js
-        # This approach ensures the process survives PowerShell exit
-        $cmdArgs = "/c cd /d `"$backendDir`" && set HOST=$hostBinding && set PORT=8080 && set NODE_ENV=production && node server-integrated.js"
+        # Create a batch file to start the wizard
+        $batchContent = @"
+@echo off
+cd /d "$backendDir"
+set HOST=$hostBinding
+set PORT=8080
+set NODE_ENV=production
+echo Starting Stack Masters Provisioning Wizard...
+echo Host: %HOST%
+echo Port: %PORT%
+echo Directory: %CD%
+node server-integrated.js > "$logsDir\wizard-$(Get-Date -Format 'yyyyMMdd-HHmmss').log" 2>&1
+"@
         
-        # Start using cmd.exe with START command for true detachment
-        $startInfo = New-Object System.Diagnostics.ProcessStartInfo
-        $startInfo.FileName = "cmd.exe"
-        $startInfo.Arguments = "/c start /b cmd.exe $cmdArgs"
-        $startInfo.UseShellExecute = $true
-        $startInfo.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
-        $startInfo.CreateNoWindow = $true
+        $batchFile = Join-Path $wizardDir "start-wizard.bat"
+        Set-Content -Path $batchFile -Value $batchContent -Encoding ASCII
         
-        $process = [System.Diagnostics.Process]::Start($startInfo)
+        # Start the batch file in a hidden window
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = "cmd.exe"
+        $psi.Arguments = "/c start /min `"Stack Masters Wizard`" `"$batchFile`""
+        $psi.UseShellExecute = $true
+        $psi.WindowStyle = "Hidden"
         
-        # Give it a moment to spawn the child process
-        Start-Sleep -Milliseconds 500
+        $process = [System.Diagnostics.Process]::Start($psi)
         
         Write-Info "Provisioning wizard starting..."
         
