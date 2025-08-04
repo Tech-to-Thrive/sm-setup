@@ -572,6 +572,167 @@ function Get-RepositoryUrl {
     return $url
 }
 
+function Setup-ProvisioningWizard {
+    Write-Info "Setting up Stack Masters Provisioning Wizard..."
+    
+    # Get the script's directory
+    $scriptDir = Split-Path -Parent $PSCommandPath
+    if ([string]::IsNullOrEmpty($scriptDir)) {
+        # Fallback for when running interactively
+        $scriptDir = (Get-Location).Path
+    }
+    
+    # Source provisioning-web is included in this repository
+    $sourceWizardDir = Join-Path $scriptDir "apps\provisioning-web"
+    
+    # Target directory for the wizard
+    $targetWizardDir = "C:\StackMasters\provisioning-wizard"
+    
+    if (-not (Test-Path $sourceWizardDir)) {
+        Write-ErrorCustom "Provisioning wizard source not found at: $sourceWizardDir"
+        throw "Provisioning wizard source not found"
+    }
+    
+    # Create StackMasters directory if it doesn't exist
+    $null = New-Item -ItemType Directory -Force -Path "C:\StackMasters"
+    
+    if (Test-Path $targetWizardDir) {
+        $backupDir = "$targetWizardDir.backup.$(Get-Date -Format 'yyyyMMddHHmmss')"
+        Write-Warning "Directory $targetWizardDir already exists. Backing up to $backupDir..."
+        Move-Item $targetWizardDir $backupDir
+    }
+    
+    Write-Info "Copying provisioning wizard to $targetWizardDir..."
+    try {
+        Copy-Item -Path $sourceWizardDir -Destination $targetWizardDir -Recurse -Force
+        Write-Success "Provisioning wizard copied successfully"
+    }
+    catch {
+        Write-ErrorCustom "Failed to copy provisioning wizard: $($_.Exception.Message)"
+        throw "Failed to copy provisioning wizard"
+    }
+    
+    return $targetWizardDir
+}
+
+function Start-ProvisioningWizard {
+    param(
+        [string]$WizardDir
+    )
+    
+    Write-Info "Starting Stack Masters Provisioning Wizard..."
+    
+    # The wizard directory is already the provisioning-web directory
+    if (-not (Test-Path $WizardDir)) {
+        Write-ErrorCustom "Provisioning wizard directory not found: $WizardDir"
+        throw "Provisioning wizard directory not found"
+    }
+    
+    Set-Location $WizardDir
+    
+    # Check for different ways to run the app
+    $dockerComposeFile = Join-Path $WizardDir "docker-compose.yml"
+    $dockerComposeYamlFile = Join-Path $WizardDir "docker-compose.yaml"
+    $dockerFile = Join-Path $WizardDir "Dockerfile"
+    $packageJson = Join-Path $WizardDir "package.json"
+    
+    # Default port (may be overridden by docker-compose or package.json)
+    $wizardPort = 8080
+    
+    if ((Test-Path $dockerComposeFile) -or (Test-Path $dockerComposeYamlFile)) {
+        $composeFile = if (Test-Path $dockerComposeFile) { $dockerComposeFile } else { $dockerComposeYamlFile }
+        Write-Info "Starting provisioning wizard with Docker Compose..."
+        
+        # Use docker compose (v2) or docker-compose (v1)
+        $dockerComposeCmd = if (Get-Command "docker" -ErrorAction SilentlyContinue) {
+            $dockerVersion = & docker compose version 2>&1
+            if ($?) { "docker compose" } else { "docker-compose" }
+        } else { "docker-compose" }
+        
+        & $dockerComposeCmd up -d
+        
+        # Wait for the service to be ready
+        Write-Info "Waiting for provisioning wizard to start..."
+        Start-Sleep -Seconds 10
+        
+        # Try to extract port from docker-compose file
+        $composeContent = Get-Content $composeFile -Raw
+        if ($composeContent -match '(?:ports:|expose:)[\s\S]*?-\s*"?(\d+):') {
+            $wizardPort = $matches[1]
+        }
+    }
+    elseif (Test-Path $dockerFile) {
+        Write-Info "Building and running provisioning wizard with Docker..."
+        
+        # Build the Docker image
+        & docker build -t stack-masters-wizard .
+        
+        # Run the container
+        & docker run -d -p "${wizardPort}:${wizardPort}" --name stack-masters-wizard stack-masters-wizard
+        
+        Write-Info "Waiting for provisioning wizard to start..."
+        Start-Sleep -Seconds 10
+    }
+    elseif (Test-Path $packageJson) {
+        # Check if Node.js is available
+        if (Get-Command npm -ErrorAction SilentlyContinue) {
+            Write-Info "Installing Node.js dependencies..."
+            & npm install
+            
+            # Check for port in package.json scripts
+            $packageContent = Get-Content $packageJson | ConvertFrom-Json
+            if ($packageContent.scripts.start -match 'PORT=(\d+)') {
+                $wizardPort = $matches[1]
+            }
+            
+            Write-Info "Starting provisioning wizard with npm..."
+            $env:PORT = $wizardPort
+            $process = Start-Process npm -ArgumentList "start" -PassThru -WindowStyle Hidden
+            Write-Info "Provisioning wizard started with PID: $($process.Id)"
+            
+            Write-Info "Waiting for provisioning wizard to start..."
+            Start-Sleep -Seconds 5
+        }
+        else {
+            Write-ErrorCustom "Node.js/npm not found. Please install Node.js or ensure Docker is available."
+            throw "Node.js not found"
+        }
+    }
+    else {
+        Write-ErrorCustom "No suitable method found to run provisioning wizard (no docker-compose.yml, Dockerfile, or package.json)"
+        throw "Cannot start provisioning wizard"
+    }
+    
+    # Display access information
+    Write-Success "Provisioning wizard is running!"
+    Write-Host ""
+    Write-Host "========================================" -ForegroundColor Green
+    Write-Host "Stack Masters Provisioning Wizard" -ForegroundColor Green
+    Write-Host "========================================" -ForegroundColor Green
+    Write-Host ""
+    Write-Host "Access the wizard at:" -ForegroundColor Yellow
+    Write-Host "  http://localhost:$wizardPort" -ForegroundColor Cyan
+    Write-Host ""
+    
+    # Get server IPs for remote access
+    $ipAddresses = Get-NetIPAddress -AddressFamily IPv4 | Where-Object { 
+        $_.IPAddress -ne "127.0.0.1" -and $_.PrefixOrigin -ne "WellKnown"
+    } | Select-Object -ExpandProperty IPAddress
+    
+    if ($ipAddresses) {
+        Write-Host "From a remote machine:" -ForegroundColor Yellow
+        foreach ($ip in $ipAddresses) {
+            Write-Host "  http://${ip}:$wizardPort" -ForegroundColor Cyan
+        }
+    }
+    Write-Host ""
+    Write-Host "The wizard will guide you through:" -ForegroundColor Yellow
+    Write-Host "  - Selecting your Stack Masters repository" -ForegroundColor White
+    Write-Host "  - Configuring your environment" -ForegroundColor White
+    Write-Host "  - Deploying your services" -ForegroundColor White
+    Write-Host ""
+}
+
 function Clone-Repository {
     $repoUrl = Get-RepositoryUrl
     
@@ -727,7 +888,7 @@ function Main {
         Write-Host "  3. Skip firewall configuration (Desktop OS detected)" -ForegroundColor Yellow
     }
     Write-Host "  4. Authenticate with GitHub" -ForegroundColor Yellow
-    Write-Host "  5. Clone the Stack Masters repository" -ForegroundColor Yellow
+    Write-Host "  5. Setup Stack Masters Provisioning Wizard" -ForegroundColor Yellow
     Write-Host ""
     Write-Host "Press any key to continue..." -ForegroundColor Cyan
     $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
@@ -759,24 +920,34 @@ function Main {
     # Configure system
     Configure-Firewall
     
-    # GitHub authentication and repository setup
+    # GitHub authentication
     Authenticate-GitHub
-    [string]$cloneDir = Clone-Repository
+    
+    # Setup and start provisioning wizard
+    $wizardDir = Setup-ProvisioningWizard
+    Start-ProvisioningWizard -WizardDir $wizardDir
     
     # Validate installation
     Test-Installation
     
     Write-Host ""
     Write-Host "================================================"
-    Write-Success "Stack Masters Windows setup completed!"
+    Write-Success "Stack Masters initial setup completed!"
     Write-Host "================================================"
     Write-Host ""
-    Write-Info "Repository location: $cloneDir"
+    Write-Info "The Stack Masters Provisioning Wizard is now running"
+    Write-Info "Use the web interface to complete your stack deployment"
+    Write-Host ""
     Write-Info "Next steps:"
-    Write-Host "  1. Restart the system if Docker was installed"
-    Write-Host "  2. cd `"$cloneDir`""
-    Write-Host "  3. Run setup scripts (if available)"
-    Write-Host "  4. Configure Docker settings if needed"
+    Write-Host "  1. Open the provisioning wizard in your browser"
+    Write-Host "  2. Select your stack configuration"
+    Write-Host "  3. Follow the guided setup process"
+    Write-Host ""
+    Write-Info "The wizard will handle:"
+    Write-Host "  - Repository selection and cloning"
+    Write-Host "  - Environment configuration"
+    Write-Host "  - Service deployment"
+    Write-Host "  - SSL certificate setup"
     Write-Host ""
     Write-Info "Log file saved to: $script:LogFile"
 }

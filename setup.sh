@@ -542,7 +542,159 @@ github_auth() {
     fi
 }
 
-# Clone appropriate repository
+# Setup provisioning wizard
+setup_provisioning_wizard() {
+    log_info "Setting up Stack Masters Provisioning Wizard..."
+    
+    # Get the script's directory
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    
+    # Source provisioning-web is included in this repository
+    SOURCE_WIZARD_DIR="$SCRIPT_DIR/apps/provisioning-web"
+    
+    # Target directory for the wizard
+    TARGET_WIZARD_DIR="/opt/stack-masters-wizard"
+    
+    if [ ! -d "$SOURCE_WIZARD_DIR" ]; then
+        log_error "Provisioning wizard source not found at: $SOURCE_WIZARD_DIR"
+        exit 1
+    fi
+    
+    # Create target directory parent if needed
+    mkdir -p "$(dirname "$TARGET_WIZARD_DIR")"
+    
+    if [ -d "$TARGET_WIZARD_DIR" ]; then
+        log_warning "Directory $TARGET_WIZARD_DIR already exists. Backing up..."
+        mv "$TARGET_WIZARD_DIR" "${TARGET_WIZARD_DIR}.backup.$(date +%Y%m%d%H%M%S)"
+    fi
+    
+    log_info "Copying provisioning wizard to $TARGET_WIZARD_DIR..."
+    if cp -r "$SOURCE_WIZARD_DIR" "$TARGET_WIZARD_DIR"; then
+        log_success "Provisioning wizard copied successfully"
+    else
+        log_error "Failed to copy provisioning wizard"
+        exit 1
+    fi
+    
+    # Set global variable for other functions
+    WIZARD_DIR="$TARGET_WIZARD_DIR"
+}
+
+# Start provisioning wizard
+start_provisioning_wizard() {
+    log_info "Starting Stack Masters Provisioning Wizard..."
+    
+    # The wizard directory is already the provisioning-web directory
+    if [ ! -d "$WIZARD_DIR" ]; then
+        log_error "Provisioning wizard directory not found: $WIZARD_DIR"
+        exit 1
+    fi
+    
+    cd "$WIZARD_DIR"
+    
+    # Check for different ways to run the app
+    DOCKER_COMPOSE_FILE=""
+    if [ -f "docker-compose.yml" ]; then
+        DOCKER_COMPOSE_FILE="docker-compose.yml"
+    elif [ -f "docker-compose.yaml" ]; then
+        DOCKER_COMPOSE_FILE="docker-compose.yaml"
+    fi
+    
+    # Default port (may be overridden by docker-compose or package.json)
+    WIZARD_PORT=8080
+    
+    if [ -n "$DOCKER_COMPOSE_FILE" ]; then
+        log_info "Starting provisioning wizard with Docker Compose..."
+        
+        # Use docker compose (v2) or docker-compose (v1)
+        if command -v docker &> /dev/null && docker compose version &> /dev/null; then
+            DOCKER_COMPOSE_CMD="docker compose"
+        else
+            DOCKER_COMPOSE_CMD="docker-compose"
+        fi
+        
+        $DOCKER_COMPOSE_CMD up -d
+        
+        # Wait for the service to be ready
+        log_info "Waiting for provisioning wizard to start..."
+        sleep 10
+        
+        # Try to extract port from docker-compose file
+        if grep -E '(ports:|expose:)' "$DOCKER_COMPOSE_FILE" | grep -oE '[0-9]+:' | head -1 | grep -oE '[0-9]+' > /dev/null; then
+            WIZARD_PORT=$(grep -E '(ports:|expose:)' "$DOCKER_COMPOSE_FILE" | grep -oE '[0-9]+:' | head -1 | grep -oE '[0-9]+')
+        fi
+    elif [ -f "Dockerfile" ]; then
+        log_info "Building and running provisioning wizard with Docker..."
+        
+        # Build the Docker image
+        docker build -t stack-masters-wizard .
+        
+        # Run the container
+        docker run -d -p ${WIZARD_PORT}:${WIZARD_PORT} --name stack-masters-wizard stack-masters-wizard
+        
+        log_info "Waiting for provisioning wizard to start..."
+        sleep 10
+    elif [ -f "package.json" ]; then
+        # Check if Node.js is available
+        if command -v npm &> /dev/null; then
+            log_info "Installing Node.js dependencies..."
+            npm install
+            
+            # Check for port in package.json scripts
+            if grep -E '"start".*PORT=[0-9]+' package.json > /dev/null; then
+                WIZARD_PORT=$(grep -E '"start".*PORT=[0-9]+' package.json | grep -oE 'PORT=[0-9]+' | grep -oE '[0-9]+')
+            fi
+            
+            log_info "Starting provisioning wizard with npm..."
+            PORT=$WIZARD_PORT npm start &
+            WIZARD_PID=$!
+            echo $WIZARD_PID > /tmp/provisioning-wizard.pid
+            log_info "Provisioning wizard started with PID: $WIZARD_PID"
+            
+            log_info "Waiting for provisioning wizard to start..."
+            sleep 5
+        else
+            log_error "Node.js/npm not found. Please install Node.js or ensure Docker is available."
+            exit 1
+        fi
+    else
+        log_error "No suitable method found to run provisioning wizard (no docker-compose.yml, Dockerfile, or package.json)"
+        exit 1
+    fi
+    
+    # Display access information
+    log_success "Provisioning wizard is running!"
+    echo ""
+    echo -e "${GREEN}========================================${NC}"
+    echo -e "${GREEN}Stack Masters Provisioning Wizard${NC}"
+    echo -e "${GREEN}========================================${NC}"
+    echo ""
+    echo -e "${YELLOW}Access the wizard at:${NC}"
+    echo -e "  ${BLUE}http://localhost:${WIZARD_PORT}${NC}"
+    echo ""
+    
+    # Get server IPs for remote access
+    if command -v hostname &> /dev/null; then
+        SERVER_IPS=$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -v '^$')
+    elif command -v ip &> /dev/null; then
+        SERVER_IPS=$(ip -4 addr show | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | grep -v '127.0.0.1')
+    fi
+    
+    if [ -n "$SERVER_IPS" ]; then
+        echo -e "${YELLOW}From a remote machine:${NC}"
+        for ip in $SERVER_IPS; do
+            echo -e "  ${BLUE}http://${ip}:${WIZARD_PORT}${NC}"
+        done
+    fi
+    echo ""
+    echo -e "${YELLOW}The wizard will guide you through:${NC}"
+    echo "  - Selecting your Stack Masters repository"
+    echo "  - Configuring your environment"
+    echo "  - Deploying your services"
+    echo ""
+}
+
+# Clone appropriate repository (called from wizard)
 clone_repository() {
     log_info "Repository Setup"
     echo ""
@@ -697,23 +849,34 @@ main() {
     # Configure system
     configure_firewall
     
-    # GitHub authentication and repository setup
+    # GitHub authentication
     github_auth
-    clone_repository
+    
+    # Setup and start provisioning wizard
+    setup_provisioning_wizard
+    start_provisioning_wizard
     
     # Validate installation
     validate_system
     
     echo ""
     echo "=============================================="
-    log_success "Stack deployment setup completed successfully!"
+    log_success "Stack Masters initial setup completed!"
     echo "=============================================="
     echo ""
-    log_info "Repository location: ${STACK_DIR}"
+    log_info "The Stack Masters Provisioning Wizard is now running"
+    log_info "Use the web interface to complete your stack deployment"
+    echo ""
     log_info "Next steps:"
-    echo "  1. cd ${STACK_DIR}"
-    echo "  2. ./setup-environment.sh (if available)"
-    echo "  3. ./install.sh"
+    echo "  1. Open the provisioning wizard in your browser"
+    echo "  2. Select your stack configuration"
+    echo "  3. Follow the guided setup process"
+    echo ""
+    log_info "The wizard will handle:"
+    echo "  - Repository selection and cloning"
+    echo "  - Environment configuration" 
+    echo "  - Service deployment"
+    echo "  - SSL certificate setup"
     echo ""
 }
 
