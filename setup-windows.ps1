@@ -865,30 +865,52 @@ function Start-ProvisioningWizard {
         Write-Info "Installing dependencies..."
         Write-Info "Working directory: $backendDir"
         
-        # Create a simple batch file to run npm install
-        # This avoids all the PowerShell execution policy and parsing issues
-        $batchFile = Join-Path $env:TEMP "npm_install_$(Get-Random).bat"
-        $batchContent = @"
-@echo off
-cd /d "$backendDir"
-call npm install --production
-exit /b %ERRORLEVEL%
-"@
+        # Simple direct approach - just run npm install
+        Write-Info "Running npm install (this may take a minute)..."
         
-        Set-Content -Path $batchFile -Value $batchContent -Encoding ASCII
+        $npmInstallResult = $null
+        $npmInstallError = $null
         
-        Write-Info "Running npm install via batch file..."
-        
-        # Execute the batch file
-        $process = Start-Process -FilePath "cmd.exe" -ArgumentList "/c `"$batchFile`"" -Wait -NoNewWindow -PassThru
-        $exitCode = $process.ExitCode
-        
-        # Clean up
-        Remove-Item $batchFile -Force -ErrorAction SilentlyContinue
-        
-        if ($exitCode -ne 0) {
-            Write-ErrorCustom "npm install failed with exit code: $exitCode"
-            throw "npm install failed"
+        # Try different methods to run npm install
+        try {
+            # Method 1: Direct invocation
+            $npmInstallResult = npm install --production 2>&1
+            if ($LASTEXITCODE -eq 0) {
+                Write-Success "npm install completed successfully"
+            }
+            else {
+                throw "npm install failed with exit code: $LASTEXITCODE"
+            }
+        }
+        catch {
+            Write-Warning "Direct npm invocation failed, trying alternative method..."
+            
+            # Method 2: Use Invoke-Expression
+            try {
+                $npmInstallResult = Invoke-Expression "npm install --production 2>&1"
+                if ($LASTEXITCODE -eq 0) {
+                    Write-Success "npm install completed successfully"
+                }
+                else {
+                    throw "npm install failed"
+                }
+            }
+            catch {
+                # Method 3: Last resort - tell user to do it manually
+                Write-ErrorCustom "Automated npm install failed"
+                Write-Info "Please run the following commands manually:"
+                Write-Host "  cd `"$backendDir`"" -ForegroundColor Yellow
+                Write-Host "  npm install --production" -ForegroundColor Yellow
+                Write-Host ""
+                Write-Host "Then press any key to continue..." -ForegroundColor Cyan
+                $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+                
+                # Verify node_modules exists
+                if (-not (Test-Path (Join-Path $backendDir "node_modules"))) {
+                    throw "node_modules directory not found. Please ensure npm install completed successfully."
+                }
+                Write-Success "Continuing with manual npm install"
+            }
         }
         
         Write-Success "Dependencies installed successfully"
@@ -1309,18 +1331,53 @@ function Start-ProvisioningWizard {
         
         # Install dependencies with error checking
         Write-Info "Installing dependencies..."
-        $npmProcess = Start-Process -FilePath "npm" -ArgumentList "install", "--production" -WorkingDirectory $backendDir -Wait -PassThru -NoNewWindow -RedirectStandardOutput "$logsDir\npm-install-output.log" -RedirectStandardError "$logsDir\npm-install-error.log"
         
-        if ($npmProcess.ExitCode -ne 0) {
-            $npmError = Get-Content "$logsDir\npm-install-error.log" -Raw -ErrorAction SilentlyContinue
-            Write-ErrorCustom "npm install failed with exit code $($npmProcess.ExitCode)"
-            if ($npmError) {
-                Write-ErrorCustom "npm error details: $npmError"
+        # Method 1: Try using cmd.exe to run npm to handle .cmd files properly on Windows
+        try {
+            $npmArgs = "/c npm install --production"
+            $npmProcess = Start-Process -FilePath "cmd.exe" -ArgumentList $npmArgs -WorkingDirectory $backendDir -Wait -PassThru -NoNewWindow -RedirectStandardOutput "$logsDir\npm-install-output.log" -RedirectStandardError "$logsDir\npm-install-error.log"
+            
+            if ($npmProcess.ExitCode -eq 0) {
+                Write-Success "Dependencies installed successfully"
             }
-            throw "npm install failed"
+            else {
+                throw "npm install failed with exit code $($npmProcess.ExitCode)"
+            }
         }
-        
-        Write-Success "Dependencies installed successfully"
+        catch {
+            Write-Warning "cmd.exe npm install failed: $_"
+            
+            # Method 2: Try direct npm.cmd execution
+            Write-Info "Trying alternative npm installation method..."
+            try {
+                $npmCmd = Get-Command npm -ErrorAction Stop
+                $npmPath = $npmCmd.Source
+                Write-Info "Found npm at: $npmPath"
+                
+                # Execute npm directly
+                $result = & $npmPath install --production 2>&1
+                if ($LASTEXITCODE -eq 0) {
+                    Write-Success "Dependencies installed successfully (alternative method)"
+                }
+                else {
+                    throw "npm install failed with exit code $LASTEXITCODE"
+                }
+            }
+            catch {
+                Write-ErrorCustom "All npm installation methods failed"
+                Write-ErrorCustom "Error details: $_"
+                
+                # Check if node_modules exists (maybe from previous run)
+                $nodeModulesPath = Join-Path $backendDir "node_modules"
+                if (Test-Path $nodeModulesPath) {
+                    Write-Warning "node_modules directory exists - attempting to continue"
+                }
+                else {
+                    Write-ErrorCustom "Please run 'npm install --production' manually in: $backendDir"
+                    throw "npm installation failed"
+                }
+            }
+        }
         
         # Check if port 58217 is available
         Write-Info "Checking port availability..."
@@ -1335,27 +1392,124 @@ function Start-ProvisioningWizard {
         $osInfo = Get-WindowsType
         $hostBinding = if ($osInfo.IsServer -or $Server -or ($Mode -eq "server")) { "0.0.0.0" } else { "localhost" }
         
-        Write-Info "Starting Node.js server directly..."
+        Write-Info "Starting Node.js server..."
         Write-Info "Host binding: $hostBinding"
         Write-Info "Working directory: $backendDir"
         
-        # Start Node.js process directly with proper error handling
-        $processInfo = New-Object System.Diagnostics.ProcessStartInfo
-        $processInfo.FileName = "node"
-        $processInfo.Arguments = "server-integrated.js"
-        $processInfo.WorkingDirectory = $backendDir
-        $processInfo.UseShellExecute = $false
-        $processInfo.CreateNoWindow = $false  # Show window for debugging
-        $processInfo.RedirectStandardOutput = $true
-        $processInfo.RedirectStandardError = $true
+        # Try multiple methods to start Node.js process
+        $nodeProcess = $null
+        $startError = $null
         
-        # Set environment variables
-        $processInfo.EnvironmentVariables["HOST"] = $hostBinding
-        $processInfo.EnvironmentVariables["PORT"] = "58217"
-        $processInfo.EnvironmentVariables["NODE_ENV"] = "production"
-        
-        # Start the process
-        $nodeProcess = [System.Diagnostics.Process]::Start($processInfo)
+        # Method 1: Try using Start-Process with proper arguments
+        try {
+            Write-Info "Attempting to start wizard with Start-Process..."
+            
+            # Create environment block
+            $env:HOST = $hostBinding
+            $env:PORT = "58217"
+            $env:NODE_ENV = "production"
+            
+            # Start the process using Start-Process cmdlet
+            $nodeProcess = Start-Process -FilePath "node" `
+                -ArgumentList "server-integrated.js" `
+                -WorkingDirectory $backendDir `
+                -PassThru `
+                -NoNewWindow `
+                -RedirectStandardOutput "$logsDir\wizard-output.log" `
+                -RedirectStandardError "$logsDir\wizard-error.log"
+            
+            if ($nodeProcess -and !$nodeProcess.HasExited) {
+                Write-Success "Wizard process started successfully (Method 1)"
+            }
+            else {
+                throw "Process failed to start or exited immediately"
+            }
+        }
+        catch {
+            $startError = $_
+            Write-Warning "Start-Process method failed: $_"
+            
+            # Method 2: Try using .NET ProcessStartInfo
+            try {
+                Write-Info "Attempting alternative start method..."
+                
+                # Get the full path to node.exe to avoid Win32 errors
+                $nodePath = (Get-Command node -ErrorAction Stop).Source
+                Write-Info "Node.js path: $nodePath"
+                
+                $processInfo = New-Object System.Diagnostics.ProcessStartInfo
+                $processInfo.FileName = $nodePath
+                $processInfo.Arguments = "server-integrated.js"
+                $processInfo.WorkingDirectory = $backendDir
+                $processInfo.UseShellExecute = $false
+                $processInfo.CreateNoWindow = $false
+                $processInfo.RedirectStandardOutput = $true
+                $processInfo.RedirectStandardError = $true
+                
+                # Set environment variables
+                $processInfo.EnvironmentVariables["HOST"] = $hostBinding
+                $processInfo.EnvironmentVariables["PORT"] = "58217"
+                $processInfo.EnvironmentVariables["NODE_ENV"] = "production"
+                
+                # Start the process
+                $nodeProcess = [System.Diagnostics.Process]::Start($processInfo)
+                
+                if ($nodeProcess) {
+                    Write-Success "Wizard process started successfully (Method 2)"
+                }
+            }
+            catch {
+                Write-Warning "ProcessStartInfo method failed: $_"
+                
+                # Method 3: Last resort - use cmd.exe to start node
+                try {
+                    Write-Info "Attempting cmd.exe start method..."
+                    
+                    # Create a batch command to start node
+                    $cmdArgs = "/c `"cd /d `"$backendDir`" && set HOST=$hostBinding && set PORT=58217 && set NODE_ENV=production && start /b node server-integrated.js > `"$logsDir\wizard-output.log`" 2> `"$logsDir\wizard-error.log`"`""
+                    
+                    $nodeProcess = Start-Process -FilePath "cmd.exe" `
+                        -ArgumentList $cmdArgs `
+                        -PassThru `
+                        -WindowStyle Hidden
+                    
+                    # Give it a moment to start
+                    Start-Sleep -Seconds 2
+                    
+                    # Try to find the node process
+                    $nodeProcesses = Get-Process -Name "node" -ErrorAction SilentlyContinue | 
+                        Where-Object { $_.Path -and (Split-Path $_.Path -Leaf) -eq "node.exe" }
+                    
+                    if ($nodeProcesses) {
+                        $nodeProcess = $nodeProcesses | Select-Object -First 1
+                        Write-Success "Wizard process started successfully (Method 3)"
+                    }
+                    else {
+                        throw "Node process not found after cmd.exe start"
+                    }
+                }
+                catch {
+                    Write-ErrorCustom "All start methods failed"
+                    Write-ErrorCustom "Last error: $_"
+                    Write-ErrorCustom "Original error: $startError"
+                    
+                    # Show manual instructions
+                    Write-Host ""
+                    Write-Warning "MANUAL START REQUIRED:"
+                    Write-Info "Please try starting the wizard manually:"
+                    Write-Info "  1. Open a new Command Prompt or PowerShell as Administrator"
+                    Write-Info "  2. Run these commands:"
+                    Write-Host "     cd `"$backendDir`"" -ForegroundColor Cyan
+                    Write-Host "     set HOST=$hostBinding" -ForegroundColor Cyan
+                    Write-Host "     set PORT=58217" -ForegroundColor Cyan
+                    Write-Host "     set NODE_ENV=production" -ForegroundColor Cyan
+                    Write-Host "     node server-integrated.js" -ForegroundColor Cyan
+                    Write-Host ""
+                    
+                    throw "Failed to start Node.js process automatically"
+                }
+            }
+        }
         
         if (-not $nodeProcess) {
             Write-ErrorCustom "Failed to start Node.js process"
