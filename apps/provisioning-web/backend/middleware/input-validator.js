@@ -5,7 +5,7 @@
  */
 
 // Import shared validators for consistency (CommonJS version)
-const sharedValidators = require('../shared/validators.cjs');
+const sharedValidators = require('../../shared/validators.cjs');
 
 // Strict validation patterns for different input types
 const ValidationPatterns = {
