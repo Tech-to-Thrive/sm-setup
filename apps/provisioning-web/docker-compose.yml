@@ -9,9 +9,11 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=8080
+      - PROJECT_ROOT=${PROJECT_ROOT:-/project}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./data:/app/data
+      - ${CLONE_DIR:-./project}:/project:rw
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/api/health"]

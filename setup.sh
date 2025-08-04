@@ -613,6 +613,10 @@ start_provisioning_wizard() {
             DOCKER_COMPOSE_CMD="docker-compose"
         fi
         
+        # Set environment variables for docker-compose
+        export CLONE_DIR="$CLONE_DIR"
+        export PROJECT_ROOT="/project"
+        
         $DOCKER_COMPOSE_CMD up -d
         
         # Wait for the service to be ready
@@ -629,8 +633,14 @@ start_provisioning_wizard() {
         # Build the Docker image
         docker build -t stack-masters-wizard .
         
-        # Run the container
-        docker run -d -p ${WIZARD_PORT}:${WIZARD_PORT} --name stack-masters-wizard stack-masters-wizard
+        # Run the container with mounted repository
+        docker run -d \
+            -p ${WIZARD_PORT}:${WIZARD_PORT} \
+            -v "${CLONE_DIR}:/project:rw" \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -e "PROJECT_ROOT=/project" \
+            --name stack-masters-wizard \
+            stack-masters-wizard
         
         log_info "Waiting for provisioning wizard to start..."
         sleep 10
@@ -755,6 +765,7 @@ clone_repository() {
     
     # Export for use in subsequent scripts
     export STACK_DIR=$CLONE_DIR
+    export CLONE_DIR=$CLONE_DIR
 }
 
 # System validation
@@ -852,6 +863,9 @@ main() {
     # GitHub authentication
     github_auth
     
+    # Clone the repository
+    clone_repository
+    
     # Setup and start provisioning wizard
     setup_provisioning_wizard
     start_provisioning_wizard
@@ -873,10 +887,11 @@ main() {
     echo "  3. Follow the guided setup process"
     echo ""
     log_info "The wizard will handle:"
-    echo "  - Repository selection and cloning"
     echo "  - Environment configuration" 
     echo "  - Service deployment"
     echo "  - SSL certificate setup"
+    echo ""
+    log_info "Repository cloned to: $CLONE_DIR"
     echo ""
 }
 

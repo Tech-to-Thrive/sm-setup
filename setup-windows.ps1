@@ -617,7 +617,8 @@ function Setup-ProvisioningWizard {
 
 function Start-ProvisioningWizard {
     param(
-        [string]$WizardDir
+        [string]$WizardDir,
+        [string]$CloneDir
     )
     
     Write-Info "Starting Stack Masters Provisioning Wizard..."
@@ -649,6 +650,10 @@ function Start-ProvisioningWizard {
             if ($?) { "docker compose" } else { "docker-compose" }
         } else { "docker-compose" }
         
+        # Set environment variables for docker-compose
+        $env:CLONE_DIR = $CloneDir
+        $env:PROJECT_ROOT = "/project"
+        
         & $dockerComposeCmd up -d
         
         # Wait for the service to be ready
@@ -667,8 +672,14 @@ function Start-ProvisioningWizard {
         # Build the Docker image
         & docker build -t stack-masters-wizard .
         
-        # Run the container
-        & docker run -d -p "${wizardPort}:${wizardPort}" --name stack-masters-wizard stack-masters-wizard
+        # Run the container with mounted repository
+        & docker run -d `
+            -p "${wizardPort}:${wizardPort}" `
+            -v "${CloneDir}:/project:rw" `
+            -v /var/run/docker.sock:/var/run/docker.sock `
+            -e "PROJECT_ROOT=/project" `
+            --name stack-masters-wizard `
+            stack-masters-wizard
         
         Write-Info "Waiting for provisioning wizard to start..."
         Start-Sleep -Seconds 10
@@ -923,9 +934,12 @@ function Main {
     # GitHub authentication
     Authenticate-GitHub
     
+    # Clone the repository
+    [string]$cloneDir = Clone-Repository
+    
     # Setup and start provisioning wizard
     $wizardDir = Setup-ProvisioningWizard
-    Start-ProvisioningWizard -WizardDir $wizardDir
+    Start-ProvisioningWizard -WizardDir $wizardDir -CloneDir $cloneDir
     
     # Validate installation
     Test-Installation
@@ -944,10 +958,11 @@ function Main {
     Write-Host "  3. Follow the guided setup process"
     Write-Host ""
     Write-Info "The wizard will handle:"
-    Write-Host "  - Repository selection and cloning"
     Write-Host "  - Environment configuration"
     Write-Host "  - Service deployment"
     Write-Host "  - SSL certificate setup"
+    Write-Host ""
+    Write-Info "Repository cloned to: $cloneDir"
     Write-Host ""
     Write-Info "Log file saved to: $script:LogFile"
 }

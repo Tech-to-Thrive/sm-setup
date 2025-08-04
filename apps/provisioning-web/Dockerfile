@@ -54,8 +54,9 @@ RUN addgroup -g 1001 -S nodejs && \
     adduser -S nodejs -u 1001
 
 # Create necessary directories and set permissions
-RUN mkdir -p /app/data && \
-    chown -R nodejs:nodejs /app
+RUN mkdir -p /app/data /project && \
+    chown -R nodejs:nodejs /app && \
+    chown -R nodejs:nodejs /project
 
 # Create a startup script
 RUN echo '#!/bin/sh' > /start.sh && \
