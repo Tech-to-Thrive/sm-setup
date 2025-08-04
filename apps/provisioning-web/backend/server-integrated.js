@@ -218,6 +218,81 @@ const saveDeploymentStates = async () => {
   }
 };
 
+// Auto-shutdown configuration
+const AUTO_SHUTDOWN_ENABLED = process.env.AUTO_SHUTDOWN !== 'false';
+const AUTO_SHUTDOWN_DELAY = parseInt(process.env.AUTO_SHUTDOWN_DELAY) || 600000; // 10 minutes default
+let shutdownTimer = null;
+
+// Function to schedule auto-shutdown
+function scheduleAutoShutdown(reason = 'Deployment completed') {
+  if (!AUTO_SHUTDOWN_ENABLED) return;
+  
+  // Clear any existing timer
+  if (shutdownTimer) {
+    clearTimeout(shutdownTimer);
+  }
+  
+  const timestamp = new Date().toISOString();
+  const minutes = Math.round(AUTO_SHUTDOWN_DELAY / 60000);
+  const timeDisplay = minutes >= 1 ? `${minutes} minute${minutes > 1 ? 's' : ''}` : `${AUTO_SHUTDOWN_DELAY / 1000} seconds`;
+  console.log(`\n[${timestamp}] 🏁 ${reason} - Wizard will automatically shut down in ${timeDisplay}...`);
+  console.log('   (Set AUTO_SHUTDOWN=false to disable auto-shutdown)');
+  
+  shutdownTimer = setTimeout(() => {
+    console.log('\n✅ Auto-shutdown: Wizard shutting down after successful deployment');
+    console.log('   To run the wizard again: setup-windows.ps1 or setup.sh');
+    gracefulShutdown();
+  }, AUTO_SHUTDOWN_DELAY);
+}
+
+// Function to perform graceful shutdown
+function gracefulShutdown() {
+  console.log('\nShutting down gracefully...');
+  
+  // Stop any running deployments
+  deploymentStates.forEach((state, id) => {
+    if (state.status === 'running') {
+      // Skip creating new executor, just mark as stopped
+      state.status = 'stopped';
+    }
+  });
+  
+  // Close WebSocket connections
+  wss.clients.forEach(client => {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(JSON.stringify({ 
+        type: 'server_shutdown',
+        message: 'Wizard shutting down after successful deployment'
+      }));
+      client.close();
+    }
+  });
+  
+  // Close HTTP server
+  server.close(() => {
+    console.log('Server closed successfully');
+    
+    // Clean up PID file
+    const pidFile = path.join(__dirname, '..', '..', '..', 'run', 'provisioning-wizard', 'wizard.pid');
+    try {
+      if (fs.existsSync(pidFile)) {
+        fs.unlinkSync(pidFile);
+        console.log('PID file removed');
+      }
+    } catch (error) {
+      console.error('Failed to remove PID file:', error);
+    }
+    
+    process.exit(0);
+  });
+  
+  // Force exit after 5 seconds if graceful shutdown fails
+  setTimeout(() => {
+    console.log('Forcing shutdown...');
+    process.exit(0);
+  }, 5000);
+}
+
 // Deployment executor class
 class DeploymentExecutor {
   constructor(deploymentId, config, resumeFromCheckpoint = null) {
@@ -495,8 +570,8 @@ class DeploymentExecutor {
       // Delete checkpoint on successful completion
       await this.checkpoint.deleteCheckpoint();
       
-      // Trigger shutdown on successful provisioning
-      security.shutdownOnSuccess();
+      // Trigger auto-shutdown on successful provisioning
+      scheduleAutoShutdown('Deployment completed successfully');
     }
     
     // Send telemetry regardless of success/failure
@@ -2208,22 +2283,28 @@ loadDeploymentStates().then(() => {
   server.listen(PORT, HOST, () => {
     displayAccessUrls();
     
+    // Write PID file for stop scripts
+    const pidFile = path.join(__dirname, '..', '..', '..', 'run', 'provisioning-wizard', 'wizard.pid');
+    try {
+      const pidDir = path.dirname(pidFile);
+      if (!fs.existsSync(pidDir)) {
+        fs.mkdirSync(pidDir, { recursive: true });
+      }
+      fs.writeFileSync(pidFile, process.pid.toString());
+      console.log(`Process ID ${process.pid} written to wizard.pid`);
+    } catch (error) {
+      console.error('Failed to write PID file:', error);
+    }
+    
     // Start idle timeout monitoring
     security.startIdleTimer();
   });
 });
 
+// Functions already moved earlier in the file
+
 // Cleanup on exit
 process.on('SIGINT', () => {
-  console.log('\nShutting down gracefully...');
-  
-  // Stop any running deployments
-  deploymentStates.forEach((state, id) => {
-    if (state.status === 'running') {
-      const executor = new DeploymentExecutor(id, state.config);
-      executor.stop();
-    }
-  });
-  
-  process.exit(0);
+  console.log('\nShutdown requested by user...');
+  gracefulShutdown();
 });

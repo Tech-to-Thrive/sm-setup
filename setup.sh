@@ -842,6 +842,82 @@ setup_provisioning_wizard() {
     log_success "Provisioning wizard copied successfully"
 }
 
+# Stop any existing wizard processes
+stop_existing_wizard() {
+    log_info "Checking for existing wizard processes..."
+    
+    local cleanup_performed=false
+    
+    # Method 1: Check for processes on port 8080
+    if command -v lsof >/dev/null 2>&1; then
+        local pids=$(lsof -ti:8080 2>/dev/null)
+        if [ -n "$pids" ]; then
+            log_warning "Found process using port 8080. Cleaning up..."
+            for pid in $pids; do
+                log_info "Stopping process PID: $pid"
+                kill -TERM "$pid" 2>/dev/null || true
+                cleanup_performed=true
+            done
+            sleep 2
+        fi
+    elif command -v netstat >/dev/null 2>&1; then
+        local pids=$(netstat -tlnp 2>/dev/null | grep ":8080" | awk '{print $7}' | cut -d'/' -f1)
+        if [ -n "$pids" ]; then
+            log_warning "Found process using port 8080. Cleaning up..."
+            for pid in $pids; do
+                if [ -n "$pid" ]; then
+                    log_info "Stopping process PID: $pid"
+                    kill -TERM "$pid" 2>/dev/null || true
+                    cleanup_performed=true
+                fi
+            done
+            sleep 2
+        fi
+    fi
+    
+    # Method 2: Check for PID file
+    local pid_file="$SCRIPT_DIR/run/provisioning-wizard/wizard.pid"
+    if [ -f "$pid_file" ]; then
+        local pid=$(cat "$pid_file" 2>/dev/null)
+        if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+            log_info "Stopping wizard process from PID file (PID: $pid)"
+            kill -TERM "$pid" 2>/dev/null || true
+            cleanup_performed=true
+            sleep 2
+        fi
+        rm -f "$pid_file"
+    fi
+    
+    # Method 3: Find node processes in wizard directory
+    if command -v pgrep >/dev/null 2>&1; then
+        local node_pids=$(pgrep -f "node.*server-integrated.js" 2>/dev/null || true)
+        if [ -n "$node_pids" ]; then
+            for pid in $node_pids; do
+                log_info "Stopping node process in wizard directory (PID: $pid)"
+                kill -TERM "$pid" 2>/dev/null || true
+                cleanup_performed=true
+            done
+            sleep 2
+        fi
+    fi
+    
+    if [ "$cleanup_performed" = true ]; then
+        log_success "Cleanup completed. Waiting for processes to fully terminate..."
+        sleep 3
+        
+        # Verify port is now free
+        if command -v lsof >/dev/null 2>&1; then
+            if ! lsof -ti:8080 >/dev/null 2>&1; then
+                log_success "Port 8080 is now available ✓"
+            else
+                log_warning "Port 8080 may still be in use. The wizard will attempt to start anyway."
+            fi
+        fi
+    else
+        log_success "No existing wizard processes found ✓"
+    fi
+}
+
 # Start provisioning wizard
 start_provisioning_wizard() {
     log_info "Starting Stack Masters Provisioning Wizard..."
@@ -942,6 +1018,13 @@ show_wizard_access_info() {
     echo "  - Configuring your environment"
     echo "  - Deploying your services"
     echo ""
+    echo "💡 Keep this terminal window open while using the wizard"
+    echo ""
+    echo "ℹ️  To restart the wizard, simply run this script again:"
+    echo "  ./setup.sh"
+    echo ""
+    echo "✨ The wizard will auto-shutdown 10 minutes after deployment completes"
+    echo ""
     echo "Log file:"
     echo "  Setup: $LOGFILE"
     echo ""
@@ -1016,6 +1099,10 @@ main() {
         log_error "System validation failed. Please fix the issues and try again."
         exit 1
     fi
+    
+    # Stop any existing wizard processes
+    echo ""
+    stop_existing_wizard
     
     # Setup and start provisioning wizard
     setup_provisioning_wizard

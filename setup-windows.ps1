@@ -179,6 +179,135 @@ function Update-Path {
     $env:PATH = "$envPath;$userPath"
 }
 
+function Stop-ExistingWizard {
+    Write-Info "Checking for existing wizard processes..."
+    
+    $cleanupPerformed = $false
+    
+    # Method 1: Check for processes on port 8080
+    try {
+        $tcpConnections = Get-NetTCPConnection -LocalPort 8080 -ErrorAction SilentlyContinue
+        if ($tcpConnections) {
+            Write-Warning "Found process using port 8080. Cleaning up..."
+            foreach ($conn in $tcpConnections) {
+                try {
+                    $process = Get-Process -Id $conn.OwningProcess -ErrorAction SilentlyContinue
+                    if ($process) {
+                        Write-Info "Stopping process: $($process.Name) (PID: $($process.Id))"
+                        Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+                        $cleanupPerformed = $true
+                        Start-Sleep -Seconds 2
+                    }
+                }
+                catch {
+                    # Ignore errors, process might have already exited
+                }
+            }
+        }
+    }
+    catch {
+        # Ignore errors if Get-NetTCPConnection fails
+    }
+    
+    # Method 2: Check for PID file
+    $scriptDir = Split-Path -Parent $PSCommandPath
+    if ([string]::IsNullOrEmpty($scriptDir)) {
+        $scriptDir = (Get-Location).Path
+    }
+    $pidFile = Join-Path $scriptDir "run\provisioning-wizard\wizard.pid"
+    
+    if (Test-Path $pidFile) {
+        try {
+            $pid = Get-Content $pidFile -ErrorAction SilentlyContinue
+            if ($pid) {
+                $process = Get-Process -Id $pid -ErrorAction SilentlyContinue
+                if ($process) {
+                    Write-Info "Stopping wizard process from PID file (PID: $pid)"
+                    Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
+                    $cleanupPerformed = $true
+                    Start-Sleep -Seconds 2
+                }
+            }
+            Remove-Item $pidFile -Force -ErrorAction SilentlyContinue
+        }
+        catch {
+            # Ignore errors
+        }
+    }
+    
+    # Method 3: Clean up any node processes in our directories
+    $wizardDirs = @(
+        "C:\StackMasters\provisioning-wizard",
+        Join-Path $scriptDir "run\provisioning-wizard"
+    )
+    
+    foreach ($dir in $wizardDirs) {
+        if (Test-Path $dir) {
+            # Find node processes with this working directory
+            Get-Process node -ErrorAction SilentlyContinue | ForEach-Object {
+                try {
+                    $processPath = $_.Path
+                    $workingDir = (Get-CimInstance Win32_Process -Filter "ProcessId = $($_.Id)").CommandLine
+                    if ($workingDir -and $workingDir -like "*$dir*") {
+                        Write-Info "Stopping node process in wizard directory (PID: $($_.Id))"
+                        Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+                        $cleanupPerformed = $true
+                    }
+                }
+                catch {
+                    # Ignore errors
+                }
+            }
+        }
+    }
+    
+    # Method 4: Clean up locked directories
+    $lockedDirs = @(
+        Join-Path $scriptDir "run\provisioning-wizard\backend",
+        "C:\StackMasters\provisioning-wizard\backend"
+    )
+    
+    foreach ($dir in $lockedDirs) {
+        if (Test-Path $dir) {
+            try {
+                # Try to access the directory
+                $testFile = Join-Path $dir ".test"
+                $null = New-Item -Path $testFile -ItemType File -Force -ErrorAction Stop
+                Remove-Item $testFile -Force -ErrorAction SilentlyContinue
+            }
+            catch {
+                Write-Warning "Directory appears to be locked: $dir"
+                # Kill any processes that might be locking it
+                Get-Process | Where-Object {
+                    $_.Modules | Where-Object { $_.FileName -like "*$dir*" }
+                } | ForEach-Object {
+                    Write-Info "Stopping process that may be locking directory: $($_.Name) (PID: $($_.Id))"
+                    Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+                    $cleanupPerformed = $true
+                }
+                Start-Sleep -Seconds 2
+            }
+        }
+    }
+    
+    if ($cleanupPerformed) {
+        Write-Success "Cleanup completed. Waiting for processes to fully terminate..."
+        Start-Sleep -Seconds 3
+        
+        # Verify port is now free
+        $portCheck = Get-NetTCPConnection -LocalPort 8080 -ErrorAction SilentlyContinue
+        if (-not $portCheck) {
+            Write-Success "Port 8080 is now available ✓"
+        }
+        else {
+            Write-Warning "Port 8080 may still be in use. The wizard will attempt to start anyway."
+        }
+    }
+    else {
+        Write-Success "No existing wizard processes found ✓"
+    }
+}
+
 function Check-SystemPackages {
     Write-Info "Checking system packages..."
     Write-Host ""
@@ -1405,11 +1534,10 @@ function Show-WizardAccessInfo {
     Write-Host ""
     Write-Host "💡 Keep this terminal window open while using the wizard" -ForegroundColor Yellow
     Write-Host ""
-    Write-Host "To stop the wizard later:" -ForegroundColor Cyan
-    Write-Host "  .\stop-wizard.ps1" -ForegroundColor White
+    Write-Host "ℹ️  To restart the wizard, simply run this script again:" -ForegroundColor Cyan
+    Write-Host "  .\setup-windows.ps1" -ForegroundColor White
     Write-Host ""
-    Write-Host "To check wizard status:" -ForegroundColor Cyan
-    Write-Host "  .\check-wizard-status.ps1" -ForegroundColor White
+    Write-Host "✨ The wizard will auto-shutdown 10 minutes after deployment completes" -ForegroundColor Green
     Write-Host ""
 }
 
@@ -1500,6 +1628,10 @@ function Main {
         Write-Info "Please resolve the issues above and try again"
         exit 1
     }
+    
+    # Stop any existing wizard processes
+    Write-Host ""
+    Stop-ExistingWizard
     
     # Setup and start provisioning wizard
     Write-Host ""
