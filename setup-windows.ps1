@@ -897,9 +897,53 @@ function Setup-ProvisioningWizard {
     }
     
     $wizardDir = Join-Path $runDir "provisioning-wizard"
+    
+    # Check if wizard directory exists and might be locked
     if (Test-Path $wizardDir) {
-        Remove-Item -Path $wizardDir -Recurse -Force
+        Write-Info "Existing wizard directory found. Checking for running processes..."
+        
+        # Check for any Node.js processes that might be using this directory
+        $nodeProcesses = Get-Process -Name "node" -ErrorAction SilentlyContinue
+        if ($nodeProcesses) {
+            Write-Warning "Found $($nodeProcesses.Count) Node.js process(es) that might be using the wizard"
+            
+            # Check specifically for processes on port 8080
+            $port8080InUse = Get-NetTCPConnection -LocalPort 8080 -ErrorAction SilentlyContinue
+            if ($port8080InUse) {
+                Write-Warning "Port 8080 is in use. Attempting to stop existing wizard..."
+                
+                foreach ($conn in $port8080InUse) {
+                    try {
+                        $proc = Get-Process -Id $conn.OwningProcess -ErrorAction SilentlyContinue
+                        if ($proc -and $proc.Name -eq "node") {
+                            Write-Info "Stopping Node.js process (PID: $($proc.Id))..."
+                            Stop-Process -Id $proc.Id -Force
+                            Write-Success "Stopped process $($proc.Id)"
+                        }
+                    }
+                    catch {
+                        Write-Warning "Could not stop process: $($_.Exception.Message)"
+                    }
+                }
+                
+                # Wait a moment for processes to fully terminate
+                Start-Sleep -Seconds 2
+            }
+        }
+        
+        # Try to remove the directory
+        try {
+            Remove-Item -Path $wizardDir -Recurse -Force -ErrorAction Stop
+            Write-Success "Cleaned up existing wizard directory"
+        }
+        catch {
+            Write-ErrorCustom "Cannot remove wizard directory: $($_.Exception.Message)"
+            Write-Info "This usually means a process is still using files in the directory"
+            Write-Info "Try running: .\stop-wizard.ps1 -Force"
+            throw "Cannot setup wizard - directory is locked"
+        }
     }
+    
     New-Item -Path $wizardDir -ItemType Directory -Force | Out-Null
     
     # Copy provisioning web app
@@ -1273,9 +1317,9 @@ function Test-WizardDiagnostics {
     }
     
     # Check available memory
-    $availableMemory = (Get-CimInstance -ClassName Win32_OperatingSystem).FreePhysicalMemory / 1MB
-    if ($availableMemory -lt 1000) {
-        $warnings += "Low available memory: $([math]::Round($availableMemory))MB (recommend 1GB+)"
+    $availableMemoryGB = (Get-CimInstance -ClassName Win32_OperatingSystem).FreePhysicalMemory / 1024 / 1024
+    if ($availableMemoryGB -lt 1) {
+        $warnings += "Low available memory: $($availableMemoryGB.ToString('N1'))GB (recommend 1GB+)"
     }
     
     # Check disk space in temp directory
@@ -1360,6 +1404,12 @@ function Show-WizardAccessInfo {
     Write-Host "  🚀 Service deployment and health monitoring" -ForegroundColor White
     Write-Host ""
     Write-Host "💡 Keep this terminal window open while using the wizard" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "To stop the wizard later:" -ForegroundColor Cyan
+    Write-Host "  .\stop-wizard.ps1" -ForegroundColor White
+    Write-Host ""
+    Write-Host "To check wizard status:" -ForegroundColor Cyan
+    Write-Host "  .\check-wizard-status.ps1" -ForegroundColor White
     Write-Host ""
 }
 
