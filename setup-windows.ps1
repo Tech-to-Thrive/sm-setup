@@ -183,50 +183,58 @@ function Stop-ExistingWizard {
     Write-Info "Checking for existing wizard processes..."
     
     $cleanupPerformed = $false
-    
-    # Method 1: Check for processes on port 8080
-    try {
-        $tcpConnections = Get-NetTCPConnection -LocalPort 8080 -ErrorAction SilentlyContinue
-        if ($tcpConnections) {
-            Write-Warning "Found process using port 8080. Cleaning up..."
-            foreach ($conn in $tcpConnections) {
-                try {
-                    $process = Get-Process -Id $conn.OwningProcess -ErrorAction SilentlyContinue
-                    if ($process) {
-                        Write-Info "Stopping process: $($process.Name) (PID: $($process.Id))"
-                        Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-                        $cleanupPerformed = $true
-                        Start-Sleep -Seconds 2
-                    }
-                }
-                catch {
-                    # Ignore errors, process might have already exited
-                }
-            }
-        }
-    }
-    catch {
-        # Ignore errors if Get-NetTCPConnection fails
-    }
-    
-    # Method 2: Check for PID file
     $scriptDir = Split-Path -Parent $PSCommandPath
     if ([string]::IsNullOrEmpty($scriptDir)) {
         $scriptDir = (Get-Location).Path
     }
-    $pidFile = Join-Path $scriptDir "run\provisioning-wizard\wizard.pid"
     
+    # Method 1: Kill ALL processes on port 58217 (our unique wizard port)
+    Write-Info "Checking port 58217..."
+    try {
+        $tcpConnections = Get-NetTCPConnection -LocalPort 58217 -State Listen -ErrorAction SilentlyContinue
+        if ($tcpConnections) {
+            Write-Warning "Found $($tcpConnections.Count) process(es) using port 58217. Force stopping all..."
+            foreach ($conn in $tcpConnections) {
+                try {
+                    Write-Info "Force stopping process on port 58217 (PID: $($conn.OwningProcess))..."
+                    Stop-Process -Id $conn.OwningProcess -Force -ErrorAction SilentlyContinue
+                    $cleanupPerformed = $true
+                }
+                catch {
+                    # Use taskkill as fallback
+                    & taskkill /F /PID $conn.OwningProcess 2>$null
+                }
+            }
+            Start-Sleep -Seconds 3
+        }
+    }
+    catch {
+        # Fallback: use netstat and taskkill
+        Write-Info "Using netstat fallback to check port 58217..."
+        $netstatOutput = & netstat -ano | findstr ":58217.*LISTENING"
+        if ($netstatOutput) {
+            $netstatOutput | ForEach-Object {
+                if ($_ -match '\s+(\d+)$') {
+                    $pid = $matches[1]
+                    Write-Info "Force stopping process on port 58217 (PID: $pid)..."
+                    & taskkill /F /PID $pid 2>$null
+                    $cleanupPerformed = $true
+                }
+            }
+            Start-Sleep -Seconds 3
+        }
+    }
+    
+    # Method 2: Check for PID file
+    $pidFile = Join-Path $scriptDir "run\provisioning-wizard\wizard.pid"
     if (Test-Path $pidFile) {
         try {
             $pid = Get-Content $pidFile -ErrorAction SilentlyContinue
             if ($pid) {
-                $process = Get-Process -Id $pid -ErrorAction SilentlyContinue
-                if ($process) {
-                    Write-Info "Stopping wizard process from PID file (PID: $pid)"
-                    Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
-                    $cleanupPerformed = $true
-                    Start-Sleep -Seconds 2
-                }
+                Write-Info "Found PID file. Force stopping process (PID: $pid)..."
+                Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
+                & taskkill /F /PID $pid 2>$null
+                $cleanupPerformed = $true
             }
             Remove-Item $pidFile -Force -ErrorAction SilentlyContinue
         }
@@ -235,74 +243,104 @@ function Stop-ExistingWizard {
         }
     }
     
-    # Method 3: Clean up any node processes in our directories
-    $wizardDirs = @(
-        (Join-Path $scriptDir "run\provisioning-wizard")
-    )
-    
-    foreach ($dir in $wizardDirs) {
-        if (Test-Path $dir) {
-            # Find node processes with this working directory
-            Get-Process node -ErrorAction SilentlyContinue | ForEach-Object {
+    # Method 3: Kill ALL node processes that might be ours
+    Write-Info "Checking for Node.js processes..."
+    $nodeProcesses = Get-Process -Name "node" -ErrorAction SilentlyContinue
+    if ($nodeProcesses) {
+        Write-Warning "Found $($nodeProcesses.Count) Node.js process(es). Checking which are wizard processes..."
+        
+        $wizardDir = Join-Path $scriptDir "run\provisioning-wizard"
+        foreach ($proc in $nodeProcesses) {
+            try {
+                # Get full command line
+                $wmiProc = Get-CimInstance Win32_Process -Filter "ProcessId = $($proc.Id)" -ErrorAction SilentlyContinue
+                if ($wmiProc) {
+                    $cmdLine = $wmiProc.CommandLine
+                    # Check if it's our wizard process
+                    if ($cmdLine -like "*provisioning-wizard*" -or 
+                        $cmdLine -like "*server-integrated.js*" -or
+                        $cmdLine -like "*$wizardDir*") {
+                        Write-Info "Force stopping wizard Node.js process (PID: $($proc.Id))..."
+                        Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+                        & taskkill /F /PID $proc.Id 2>$null
+                        $cleanupPerformed = $true
+                    }
+                }
+            }
+            catch {
+                # If we can't check, kill it if it's using our port
                 try {
-                    $processPath = $_.Path
-                    $workingDir = (Get-CimInstance Win32_Process -Filter "ProcessId = $($_.Id)").CommandLine
-                    if ($workingDir -and $workingDir -like "*$dir*") {
-                        Write-Info "Stopping node process in wizard directory (PID: $($_.Id))"
-                        Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+                    $tcpCheck = Get-NetTCPConnection -OwningProcess $proc.Id -LocalPort 58217 -ErrorAction SilentlyContinue
+                    if ($tcpCheck) {
+                        Write-Info "Force stopping Node.js process on port 58217 (PID: $($proc.Id))..."
+                        Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+                        & taskkill /F /PID $proc.Id 2>$null
                         $cleanupPerformed = $true
                     }
                 }
                 catch {
-                    # Ignore errors
+                    # Ignore
                 }
             }
         }
     }
     
-    # Method 4: Clean up locked directories
-    $lockedDirs = @(
-        (Join-Path $scriptDir "run\provisioning-wizard\backend")
-    )
-    
-    foreach ($dir in $lockedDirs) {
-        if (Test-Path $dir) {
-            try {
-                # Try to access the directory
-                $testFile = Join-Path $dir ".test"
-                $null = New-Item -Path $testFile -ItemType File -Force -ErrorAction Stop
-                Remove-Item $testFile -Force -ErrorAction SilentlyContinue
+    # Method 4: Use handle.exe or PowerShell to find processes locking our directory
+    $wizardDir = Join-Path $scriptDir "run\provisioning-wizard"
+    if (Test-Path $wizardDir) {
+        Write-Info "Checking for processes locking wizard directory..."
+        
+        # Try PowerShell method to find locking processes
+        try {
+            # This finds processes that have modules loaded from our directory
+            Get-Process | Where-Object {
+                try {
+                    $modules = $_ | Select-Object -ExpandProperty Modules -ErrorAction SilentlyContinue
+                    $modules | Where-Object { $_.FileName -like "*$wizardDir*" }
+                } catch { $false }
+            } | ForEach-Object {
+                Write-Info "Force stopping process with modules in wizard directory: $($_.Name) (PID: $($_.Id))..."
+                Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+                & taskkill /F /PID $_.Id 2>$null
+                $cleanupPerformed = $true
             }
-            catch {
-                Write-Warning "Directory appears to be locked: $dir"
-                # Kill any processes that might be locking it
-                Get-Process | Where-Object {
-                    $_.Modules | Where-Object { $_.FileName -like "*$dir*" }
-                } | ForEach-Object {
-                    Write-Info "Stopping process that may be locking directory: $($_.Name) (PID: $($_.Id))"
-                    Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
-                    $cleanupPerformed = $true
-                }
-                Start-Sleep -Seconds 2
-            }
+        }
+        catch {
+            # Ignore errors
         }
     }
     
     if ($cleanupPerformed) {
-        Write-Success "Cleanup completed. Waiting for processes to fully terminate..."
-        Start-Sleep -Seconds 3
+        Write-Success "Aggressive cleanup completed. Waiting for processes to fully terminate..."
+        Start-Sleep -Seconds 5  # Give more time for processes to die
         
-        # Verify port is now free
-        $portCheck = Get-NetTCPConnection -LocalPort 8080 -ErrorAction SilentlyContinue
+        # Double-check port is free
+        $portCheck = Get-NetTCPConnection -LocalPort 58217 -State Listen -ErrorAction SilentlyContinue
         if (-not $portCheck) {
-            Write-Success "Port 8080 is now available ✓"
+            Write-Success "Port 58217 is now available ✓"
         }
         else {
-            Write-Warning "Port 8080 may still be in use. The wizard will attempt to start anyway."
+            Write-Warning "Port 58217 is STILL in use. Attempting final cleanup..."
+            # Last resort - kill anything on port 58217
+            $portCheck | ForEach-Object {
+                & taskkill /F /PID $_.OwningProcess 2>$null
+            }
+            Start-Sleep -Seconds 2
         }
     }
     else {
         Write-Success "No existing wizard processes found ✓"
+    }
+    
+    # Final cleanup - remove any stale PID files
+    $pidFiles = @(
+        (Join-Path $scriptDir "run\provisioning-wizard\wizard.pid"),
+        (Join-Path $scriptDir "run\provisioning-wizard\backend\wizard.pid")
+    )
+    foreach ($file in $pidFiles) {
+        if (Test-Path $file) {
+            Remove-Item $file -Force -ErrorAction SilentlyContinue
+        }
     }
 }
 
@@ -595,7 +633,7 @@ function Configure-ServerFirewall {
     
     # Only configure ports actually used by Stack Masters
     # Removed ports 80 and 443 - not needed by Stack Masters
-    [int[]]$ports = @(8080, 3000, 3001, 3002, 5678, 9090, 9999, 587, 465)  # 8080 is for provisioning wizard
+    [int[]]$ports = @(58217, 3000, 3001, 3002, 5678, 9090, 9999, 587, 465)  # 58217 is for provisioning wizard
     
     foreach ($port in $ports) {
         $currentPort = $port
@@ -863,14 +901,15 @@ function Start-ProvisioningWizard {
     
     # Set environment variables
     # PROJECT_ROOT will be set after cloning via web wizard
-    $env:PORT = "8080"
+    # Use a unique port that's unlikely to conflict with other services
+    $env:PORT = "58217"  # Random high port to avoid conflicts
     $env:NODE_ENV = "production"
     
     # Detect environment and set HOST
     $osInfo = Get-WindowsType
     $env:HOST = if ($osInfo.Type -eq "Desktop") { "localhost" } else { "0.0.0.0" }
     
-    Write-Info "Starting provisioning wizard on port 8080..."
+    Write-Info "Starting provisioning wizard on port 58217..."
     
     # Start the backend server in detached mode
     Write-Info "Starting Node.js server in background..."
@@ -911,14 +950,14 @@ function Start-ProvisioningWizard {
     
     # Test if server is accessible
     try {
-        $testResponse = Invoke-WebRequest -Uri "http://localhost:8080/api/health" -TimeoutSec 5 -UseBasicParsing -ErrorAction SilentlyContinue
+        $testResponse = Invoke-WebRequest -Uri "http://localhost:58217/api/health" -TimeoutSec 5 -UseBasicParsing -ErrorAction SilentlyContinue
         if ($testResponse.StatusCode -eq 200) {
-            Write-Success "Server is responding on port 8080 ✓"
+            Write-Success "Server is responding on port 58217 ✓"
         } else {
-            Write-Warning "Server may not be fully ready yet. Check http://localhost:8080 in a moment."
+            Write-Warning "Server may not be fully ready yet. Check http://localhost:58217 in a moment."
         }
     } catch {
-        Write-Warning "Unable to verify server status. Please check http://localhost:8080 manually."
+        Write-Warning "Unable to verify server status. Please check http://localhost:58217 manually."
     }
     
     # Display access information
@@ -929,7 +968,7 @@ function Start-ProvisioningWizard {
     Write-Host "========================================" -ForegroundColor Green
     Write-Host ""
     Write-Host "Access the wizard at:" -ForegroundColor Yellow
-    Write-Host "  http://localhost:8080" -ForegroundColor Cyan
+    Write-Host "  http://localhost:58217" -ForegroundColor Cyan
     Write-Host ""
     
     # Get server IPs for remote access
@@ -940,7 +979,7 @@ function Start-ProvisioningWizard {
     if ($ipAddresses) {
         Write-Host "From a remote machine:" -ForegroundColor Yellow
         foreach ($ip in $ipAddresses) {
-            Write-Host "  http://${ip}:8080" -ForegroundColor Cyan
+            Write-Host "  http://${ip}:58217" -ForegroundColor Cyan
         }
     }
     Write-Host ""
@@ -1087,8 +1126,8 @@ function Test-SystemRequirements {
     }
     
     # Check wizard port
-    if (Test-PortAvailability -Port 8080 -ServiceName "Provisioning Wizard") {
-        Write-Success "Port 8080 available for wizard ✓"
+    if (Test-PortAvailability -Port 58217 -ServiceName "Provisioning Wizard") {
+        Write-Success "Port 58217 available for wizard ✓"
     }
     else {
         $validationErrors++
@@ -1174,11 +1213,11 @@ function Test-WizardDiagnostics {
         Write-Success "npm installed: $npmVersion"
     }
     
-    # Check if port 8080 is available (more thorough check)
-    Write-Info "Checking port 8080 availability..."
-    $tcpConnections = Get-NetTCPConnection -LocalPort 8080 -ErrorAction SilentlyContinue
+    # Check if port 58217 is available (more thorough check)
+    Write-Info "Checking port 58217 availability..."
+    $tcpConnections = Get-NetTCPConnection -LocalPort 58217 -ErrorAction SilentlyContinue
     if ($tcpConnections) {
-        Write-ErrorCustom "Port 8080 is already in use!"
+        Write-ErrorCustom "Port 58217 is already in use!"
         
         # Try to identify the process
         foreach ($conn in $tcpConnections) {
@@ -1191,11 +1230,11 @@ function Test-WizardDiagnostics {
             }
         }
         
-        Write-Info "Please stop the process using port 8080 or choose a different port"
+        Write-Info "Please stop the process using port 58217 or choose a different port"
         $diagnosticErrors++
     }
     else {
-        Write-Success "Port 8080 is available"
+        Write-Success "Port 58217 is available"
     }
     
     # Return object with diagnostic results
@@ -1253,13 +1292,13 @@ function Start-ProvisioningWizard {
         
         Write-Success "Dependencies installed successfully"
         
-        # Check if port 8080 is available
+        # Check if port 58217 is available
         Write-Info "Checking port availability..."
-        $portInUse = Get-NetTCPConnection -LocalPort 8080 -ErrorAction SilentlyContinue
+        $portInUse = Get-NetTCPConnection -LocalPort 58217 -ErrorAction SilentlyContinue
         if ($portInUse) {
-            Write-ErrorCustom "Port 8080 is already in use by another process"
-            Write-Info "To find what's using the port: netstat -ano | findstr :8080"
-            throw "Port 8080 is not available"
+            Write-ErrorCustom "Port 58217 is already in use by another process"
+            Write-Info "To find what's using the port: netstat -ano | findstr :58217"
+            throw "Port 58217 is not available"
         }
         
         # Determine host binding
@@ -1282,7 +1321,7 @@ function Start-ProvisioningWizard {
         
         # Set environment variables
         $processInfo.EnvironmentVariables["HOST"] = $hostBinding
-        $processInfo.EnvironmentVariables["PORT"] = "8080"
+        $processInfo.EnvironmentVariables["PORT"] = "58217"
         $processInfo.EnvironmentVariables["NODE_ENV"] = "production"
         
         # Start the process
@@ -1329,7 +1368,7 @@ function Start-ProvisioningWizard {
             # Check if server is responding - try multiple endpoints
             try {
                 # Try health endpoint first
-                $healthResponse = Invoke-WebRequest -Uri "http://$hostBinding:8080/api/health" -TimeoutSec 2 -ErrorAction SilentlyContinue
+                $healthResponse = Invoke-WebRequest -Uri "http://$hostBinding:58217/api/health" -TimeoutSec 2 -ErrorAction SilentlyContinue
                 if ($healthResponse.StatusCode -eq 200) {
                     $processStarted = $true
                     break
@@ -1338,7 +1377,7 @@ function Start-ProvisioningWizard {
             catch {
                 # Health endpoint might require auth, try the root endpoint
                 try {
-                    $rootResponse = Invoke-WebRequest -Uri "http://$hostBinding:8080/" -TimeoutSec 2 -ErrorAction SilentlyContinue
+                    $rootResponse = Invoke-WebRequest -Uri "http://$hostBinding:58217/" -TimeoutSec 2 -ErrorAction SilentlyContinue
                     if ($rootResponse.StatusCode -eq 200 -or $rootResponse.StatusCode -eq 401 -or $rootResponse.StatusCode -eq 403) {
                         # Server is responding (even if it returns auth errors, that means it's running)
                         $processStarted = $true
@@ -1361,12 +1400,12 @@ function Start-ProvisioningWizard {
         }
         elseif ($processStarted) {
             Write-Success "Provisioning wizard started successfully!"
-            Write-Success "Health check passed: server is responding on port 8080"
+            Write-Success "Health check passed: server is responding on port 58217"
             Show-WizardAccessInfo -HostBinding $hostBinding
         }
         else {
             # Process is running but not responding
-            Write-ErrorCustom "Node.js process is running but server is not responding on port 8080"
+            Write-ErrorCustom "Node.js process is running but server is not responding on port 58217"
             Write-ErrorCustom "This usually indicates a configuration or dependency issue"
             
             # Try to get some output from the process
@@ -1402,7 +1441,7 @@ function Start-ProvisioningWizard {
         $wizardInfoFile = Join-Path $wizardDir "wizard-info.txt"
         
         # Build URLs for the info file
-        $localUrl = "http://localhost:8080"
+        $localUrl = "http://localhost:58217"
         $remoteUrls = @()
         
         if ($hostBinding -ne "localhost") {
@@ -1412,11 +1451,11 @@ function Start-ProvisioningWizard {
                     ($_.PrefixOrigin -eq "Dhcp" -or $_.PrefixOrigin -eq "Manual") 
                 }
                 foreach ($adapter in $networkAdapters) {
-                    $remoteUrls += "  http://$($adapter.IPAddress):8080"
+                    $remoteUrls += "  http://$($adapter.IPAddress):58217"
                 }
             }
             catch {
-                $remoteUrls += "  http://YOUR-SERVER-IP:8080"
+                $remoteUrls += "  http://YOUR-SERVER-IP:58217"
             }
         }
         
@@ -1440,13 +1479,13 @@ System Information:
 Management Commands:
   Check if running:   Get-Process -Id $($nodeProcess.Id) -ErrorAction SilentlyContinue
   Stop wizard:        Stop-Process -Id $($nodeProcess.Id) -Force
-  Check port status:  netstat -ano | findstr :8080
+  Check port status:  netstat -ano | findstr :58217
   View logs:          Get-Content "$logsDir\stack-masters-setup-*.log" -Tail 50
 
 Troubleshooting:
   If wizard stops responding:
     1. Check process: Get-Process -Id $($nodeProcess.Id)
-    2. Check port: netstat -ano | findstr :8080  
+    2. Check port: netstat -ano | findstr :58217  
     3. View recent logs in: $logsDir
     4. Restart manually: cd "$backendDir" && node server-integrated.js
 "@
@@ -1483,21 +1522,21 @@ function Test-WizardDiagnostics {
         $issues += "npm is not installed or not in PATH"
     }
     
-    # Check port 8080
-    $portInUse = Get-NetTCPConnection -LocalPort 8080 -ErrorAction SilentlyContinue
+    # Check port 58217
+    $portInUse = Get-NetTCPConnection -LocalPort 58217 -ErrorAction SilentlyContinue
     if ($portInUse) {
         $processId = $portInUse.OwningProcess
         $processName = (Get-Process -Id $processId -ErrorAction SilentlyContinue).ProcessName
-        $issues += "Port 8080 is already in use by process: $processName (PID: $processId)"
+        $issues += "Port 58217 is already in use by process: $processName (PID: $processId)"
     }
     
     # Check Windows Firewall (for server environments)
     $osInfo = Get-WindowsType
     if ($osInfo.IsServer) {
         try {
-            $firewallRule = Get-NetFirewallRule -DisplayName "*Stack Masters*8080*" -ErrorAction SilentlyContinue
+            $firewallRule = Get-NetFirewallRule -DisplayName "*Stack Masters*58217*" -ErrorAction SilentlyContinue
             if (-not $firewallRule) {
-                $warnings += "No firewall rule found for port 8080 on server OS"
+                $warnings += "No firewall rule found for port 58217 on server OS"
             }
         }
         catch {
@@ -1558,10 +1597,10 @@ function Show-WizardAccessInfo {
     Write-Host "Access the wizard at:" -ForegroundColor Cyan
     
     if ($HostBinding -eq "localhost") {
-        Write-Host "  🌐 http://localhost:8080" -ForegroundColor Yellow
+        Write-Host "  🌐 http://localhost:58217" -ForegroundColor Yellow
     }
     else {
-        Write-Host "  🌐 http://localhost:8080" -ForegroundColor Yellow
+        Write-Host "  🌐 http://localhost:58217" -ForegroundColor Yellow
         
         # Show network interfaces for remote access
         try {
@@ -1573,7 +1612,7 @@ function Show-WizardAccessInfo {
                 Write-Host ""
                 Write-Host "Remote access URLs:" -ForegroundColor Cyan
                 foreach ($adapter in $networkAdapters) {
-                    Write-Host "  🌐 http://$($adapter.IPAddress):8080" -ForegroundColor Yellow
+                    Write-Host "  🌐 http://$($adapter.IPAddress):58217" -ForegroundColor Yellow
                 }
             }
         }
@@ -1581,7 +1620,7 @@ function Show-WizardAccessInfo {
             # Fallback if network detection fails
             Write-Host ""
             Write-Host "Remote access:" -ForegroundColor Cyan
-            Write-Host "  🌐 http://YOUR-SERVER-IP:8080" -ForegroundColor Yellow
+            Write-Host "  🌐 http://YOUR-SERVER-IP:58217" -ForegroundColor Yellow
         }
     }
     
@@ -1732,7 +1771,7 @@ function Main {
         Write-Info "Troubleshooting steps:"
         Write-Host "  1. Check the log files in: $script:LogFile" -ForegroundColor White
         Write-Host "  2. Verify Node.js and npm are working: node --version && npm --version" -ForegroundColor White
-        Write-Host "  3. Check if port 8080 is available: netstat -ano | findstr :8080" -ForegroundColor White
+        Write-Host "  3. Check if port 58217 is available: netstat -ano | findstr :58217" -ForegroundColor White
         Write-Host "  4. Try running the wizard manually:" -ForegroundColor White
         Write-Host "     cd `"$wizardDir\backend`"" -ForegroundColor Gray
         Write-Host "     npm install" -ForegroundColor Gray

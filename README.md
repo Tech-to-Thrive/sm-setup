@@ -44,7 +44,7 @@ apt, yum/dnf, pacman, zypper, winget (Windows Package Manager)
 ## 🎯 How It Works
 
 1. **Run one command** - Setup script validates your system
-2. **Open your browser** - Go to the URL shown (e.g., http://your-ip:8080)
+2. **Open your browser** - Go to the URL shown (e.g., http://your-ip:58217)
 3. **Follow the wizard** - Authenticate GitHub, select repository, configure, deploy
 4. **Stack is running** - Everything configured and deployed automatically
 

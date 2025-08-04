@@ -465,7 +465,7 @@ configure_server_firewall() {
     PORTS=(
         "80:tcp"      # HTTP (Nginx proxy)
         "443:tcp"     # HTTPS (Nginx proxy)
-        "8080:tcp"    # Alternative HTTP port
+        "58217:tcp"    # Alternative HTTP port
         "3000:tcp"    # Grafana
         "3001:tcp"    # Stack Manager UI
         "3002:tcp"    # Stack Manager API
@@ -605,11 +605,11 @@ start_provisioning_wizard() {
     
     # Set environment variables
     # PROJECT_ROOT will be set after cloning via web wizard
-    export PORT="8080"
+    export PORT="58217"
     export NODE_ENV="production"
     export HOST=$([ "$OS_TYPE" = "desktop" ] && echo "localhost" || echo "0.0.0.0")
     
-    log_info "Starting provisioning wizard on port 8080..."
+    log_info "Starting provisioning wizard on port 58217..."
     
     # Start the backend server
     node server-integrated.js &
@@ -630,7 +630,7 @@ start_provisioning_wizard() {
     echo -e "${GREEN}========================================${NC}"
     echo ""
     echo -e "${YELLOW}Access the wizard at:${NC}"
-    echo -e "  ${BLUE}http://localhost:8080${NC}"
+    echo -e "  ${BLUE}http://localhost:58217${NC}"
     echo ""
     
     # Get server IPs for remote access
@@ -643,7 +643,7 @@ start_provisioning_wizard() {
     if [ -n "$SERVER_IPS" ]; then
         echo -e "${YELLOW}From a remote machine:${NC}"
         for ip in $SERVER_IPS; do
-            echo -e "  ${BLUE}http://${ip}:8080${NC}"
+            echo -e "  ${BLUE}http://${ip}:58217${NC}"
         done
     fi
     echo ""
@@ -774,10 +774,10 @@ validate_system_requirements() {
     }
     
     # Check wizard port
-    if ! check_port_availability 8080 "Provisioning Wizard"; then
+    if ! check_port_availability 58217 "Provisioning Wizard"; then
         ((validation_errors++))
     else
-        log_success "Port 8080 available for wizard ✓"
+        log_success "Port 58217 available for wizard ✓"
     fi
     
     # Check other critical ports (warnings only)
@@ -848,11 +848,11 @@ stop_existing_wizard() {
     
     local cleanup_performed=false
     
-    # Method 1: Check for processes on port 8080
+    # Method 1: Check for processes on port 58217
     if command -v lsof >/dev/null 2>&1; then
-        local pids=$(lsof -ti:8080 2>/dev/null)
+        local pids=$(lsof -ti:58217 2>/dev/null)
         if [ -n "$pids" ]; then
-            log_warning "Found process using port 8080. Cleaning up..."
+            log_warning "Found process using port 58217. Cleaning up..."
             for pid in $pids; do
                 log_info "Stopping process PID: $pid"
                 kill -TERM "$pid" 2>/dev/null || true
@@ -861,9 +861,9 @@ stop_existing_wizard() {
             sleep 2
         fi
     elif command -v netstat >/dev/null 2>&1; then
-        local pids=$(netstat -tlnp 2>/dev/null | grep ":8080" | awk '{print $7}' | cut -d'/' -f1)
+        local pids=$(netstat -tlnp 2>/dev/null | grep ":58217" | awk '{print $7}' | cut -d'/' -f1)
         if [ -n "$pids" ]; then
-            log_warning "Found process using port 8080. Cleaning up..."
+            log_warning "Found process using port 58217. Cleaning up..."
             for pid in $pids; do
                 if [ -n "$pid" ]; then
                     log_info "Stopping process PID: $pid"
@@ -907,10 +907,10 @@ stop_existing_wizard() {
         
         # Verify port is now free
         if command -v lsof >/dev/null 2>&1; then
-            if ! lsof -ti:8080 >/dev/null 2>&1; then
-                log_success "Port 8080 is now available ✓"
+            if ! lsof -ti:58217 >/dev/null 2>&1; then
+                log_success "Port 58217 is now available ✓"
             else
-                log_warning "Port 8080 may still be in use. The wizard will attempt to start anyway."
+                log_warning "Port 58217 may still be in use. The wizard will attempt to start anyway."
             fi
         fi
     else
@@ -948,10 +948,10 @@ start_provisioning_wizard() {
     
     # Set environment variables and start server in background
     export HOST="$HOST_BINDING"
-    export PORT="8080"
+    export PORT="58217"
     export NODE_ENV="production"
     
-    log_info "Starting provisioning wizard on port 8080..."
+    log_info "Starting provisioning wizard on port 58217..."
     
     # Start Node.js server in background with timestamped log
     WIZARD_LOG_TIMESTAMP=$(date '+%Y%m%d-%H%M%S')
@@ -967,7 +967,7 @@ start_provisioning_wizard() {
     sleep 8
     
     # Test if server is accessible
-    if curl -s "http://$HOST_BINDING:8080" >/dev/null 2>&1; then
+    if curl -s "http://$HOST_BINDING:58217" >/dev/null 2>&1; then
         log_success "Provisioning wizard is running!"
     else
         log_warning "Server may still be starting up. Check manually if needed."
@@ -991,24 +991,24 @@ show_wizard_access_info() {
     echo "Access the wizard at:"
     
     if [ "$host_binding" = "localhost" ]; then
-        echo "  http://localhost:8080"
+        echo "  http://localhost:58217"
     else
-        echo "  http://localhost:8080"
+        echo "  http://localhost:58217"
         echo ""
         echo "From a remote machine:"
         
         # Show network interfaces for remote access
         if command -v ip >/dev/null 2>&1; then
             ip -4 addr show | grep inet | grep -v 127.0.0.1 | awk '{print $2}' | cut -d/ -f1 | while read -r ip; do
-                echo "  http://$ip:8080"
+                echo "  http://$ip:58217"
             done
         elif command -v hostname >/dev/null 2>&1; then
             local_ip=$(hostname -I | awk '{print $1}')
             if [ -n "$local_ip" ]; then
-                echo "  http://$local_ip:8080"
+                echo "  http://$local_ip:58217"
             fi
         else
-            echo "  http://YOUR-SERVER-IP:8080"
+            echo "  http://YOUR-SERVER-IP:58217"
         fi
     fi
     

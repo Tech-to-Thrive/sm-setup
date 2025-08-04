@@ -32,7 +32,7 @@ const security = new ProvisioningSecurity();
 const app = express();
 
 // Platform-aware configuration
-const PORT = process.env.PORT || 8080;
+const PORT = process.env.PORT || 58217;  // Using unique high port to avoid conflicts
 const HOST = process.env.HOST || (platform.isDesktopEnvironment() ? 'localhost' : '0.0.0.0');
 
 // Create HTTP server for WebSocket support
