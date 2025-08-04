@@ -34,7 +34,7 @@ $RECYCLE.BIN/
 *.psd1.bak
 PowerShell_profile.ps1
 Modules/
-Scripts/
+# Scripts/ - Removed to allow our scripts folder to be committed
 
 # Bash/Shell specific
 *.sh.bak

@@ -49,6 +49,9 @@ const ValidationPatterns = {
   // Account IDs
   accountId: /^[a-zA-Z0-9-]{36}$/,
   
+  // File system paths (Unix and Windows)
+  path: /^[a-zA-Z0-9._~:/?#[\]@!$&'()*+,;=\\/\-\s]+$/,
+  
   // API tokens (longer hex or base64)
   apiToken: /^[a-zA-Z0-9_\-+=\/]{40,}$/
 };
@@ -305,6 +308,12 @@ const validators = {
     'query.token': 'hex',
     'params.token': 'hex',
     'body.token': 'hex'
+  }),
+  
+  // GitHub clone validation
+  validateGitHubClone: createInputValidator({
+    'body.repositoryUrl': 'url',
+    'body.targetPath': 'path'
   })
 };
 

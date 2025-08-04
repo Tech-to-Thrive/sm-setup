@@ -464,82 +464,13 @@ function Configure-ServerFirewall {
     Write-Success "Windows Firewall configured"
 }
 
+# GitHub authentication is now handled by the web wizard
+# This function is kept for reference but no longer used
+<#
 function Authenticate-GitHub {
-    if ($SkipAuth) {
-        Write-Info "Skipping GitHub authentication"
-        return
-    }
-    
-    Write-Info "Setting up GitHub authentication..."
-    
-    try {
-        $authStatus = & gh auth status 2>&1
-        if ($?) {
-            Write-Success "GitHub CLI already authenticated"
-            return
-        }
-    }
-    catch {
-        # Not authenticated, proceed with login
-    }
-    
-    Write-Info "GitHub authentication required for repository access"
-    
-    # Detect server environment (Windows Server or --Server flag)
-    $isServerEnvironment = ($Server -or (Get-CimInstance -ClassName Win32_OperatingSystem).ProductType -ne 1)
-    
-    if ($isServerEnvironment) {
-        Write-Info "Server environment detected - using device code authentication"
-        Write-Host ""
-        Write-Host "==========================================" -ForegroundColor Yellow
-        Write-Info "GITHUB AUTHENTICATION REQUIRED"
-        Write-Host "==========================================" -ForegroundColor Yellow
-        Write-Host ""
-        Write-Info "1. GitHub will display a device code below"
-        Write-Info "2. Copy the device code"
-        Write-Info "3. Visit: https://github.com/login/device"
-        Write-Info "4. Paste the code and complete authentication"
-        Write-Host ""
-        Write-Host "Starting GitHub authentication..." -ForegroundColor Green
-        Write-Host ""
-        
-        try {
-            & gh auth login
-            Write-Success "GitHub authentication successful"
-        }
-        catch {
-            Write-ErrorCustom "GitHub authentication failed: $($_.Exception.Message)"
-            throw "GitHub authentication failed: $($_.Exception.Message)"
-        }
-    }
-    else {
-        Write-Info "Desktop environment detected - opening browser for authentication"
-        Write-Info "If browser doesn't open, you'll see a device code to enter at: https://github.com/login/device"
-        Write-Host ""
-        
-        try {
-            # Try browser auth first with timeout
-            $job = Start-Job -ScriptBlock { & gh auth login --web }
-            $null = Wait-Job $job -Timeout 30
-            
-            if ($job.State -eq "Completed") {
-                Receive-Job $job
-                Write-Success "GitHub authentication successful"
-            }
-            else {
-                Stop-Job $job
-                Remove-Job $job
-                Write-Info "Browser authentication timed out, using device code flow..."
-                & gh auth login
-                Write-Success "GitHub authentication successful"
-            }
-        }
-        catch {
-            Write-ErrorCustom "GitHub authentication failed: $($_.Exception.Message)"
-            throw "GitHub authentication failed: $($_.Exception.Message)"
-        }
-    }
+    # Moved to web wizard
 }
+#>
 
 function Get-RepositoryUrl {
     if (-not [string]::IsNullOrEmpty($RepoUrl)) {
@@ -617,8 +548,7 @@ function Setup-ProvisioningWizard {
 
 function Start-ProvisioningWizard {
     param(
-        [string]$WizardDir,
-        [string]$CloneDir
+        [string]$WizardDir
     )
     
     Write-Info "Starting Stack Masters Provisioning Wizard..."
@@ -658,9 +588,13 @@ function Start-ProvisioningWizard {
     & npm install --production
     
     # Set environment variables
-    $env:PROJECT_ROOT = $CloneDir
+    # PROJECT_ROOT will be set after cloning via web wizard
     $env:PORT = "8080"
     $env:NODE_ENV = "production"
+    
+    # Detect environment and set HOST
+    $osInfo = Get-WindowsType
+    $env:HOST = if ($osInfo.Type -eq "Desktop") { "localhost" } else { "0.0.0.0" }
     
     Write-Info "Starting provisioning wizard on port 8080..."
     
@@ -683,7 +617,7 @@ function Start-ProvisioningWizard {
     Write-Host "========================================" -ForegroundColor Green
     Write-Host ""
     Write-Host "Access the wizard at:" -ForegroundColor Yellow
-    Write-Host "  http://localhost:$wizardPort" -ForegroundColor Cyan
+    Write-Host "  http://localhost:8080" -ForegroundColor Cyan
     Write-Host ""
     
     # Get server IPs for remote access
@@ -694,7 +628,7 @@ function Start-ProvisioningWizard {
     if ($ipAddresses) {
         Write-Host "From a remote machine:" -ForegroundColor Yellow
         foreach ($ip in $ipAddresses) {
-            Write-Host "  http://${ip}:$wizardPort" -ForegroundColor Cyan
+            Write-Host "  http://${ip}:8080" -ForegroundColor Cyan
         }
     }
     Write-Host ""
@@ -705,118 +639,191 @@ function Start-ProvisioningWizard {
     Write-Host ""
 }
 
+# Repository cloning is now handled by the web wizard
+# This function is kept for reference but no longer used
+<#
 function Clone-Repository {
-    $repoUrl = Get-RepositoryUrl
+    # Moved to web wizard - handled via /api/github/clone endpoint
+}
+#>
+
+function Test-SystemRequirements {
+    Write-Info "Running comprehensive system validation..."
     
-    # Extract repository name from URL
-    $repoName = ($repoUrl -split '/')[-1] -replace '\.git$', ''
-    $cloneDir = "C:\StackMasters\$repoName"
+    $validationErrors = 0
     
-    Write-Info "Repository: $repoUrl"
-    Write-Info "Clone directory: $cloneDir"
+    # Check disk space (minimum 20GB)
+    Write-Info "Checking disk space..."
+    $disk = Get-CimInstance -ClassName Win32_LogicalDisk -Filter "DeviceID='C:'"
+    $freeSpaceGB = [math]::Round($disk.FreeSpace / 1GB, 1)
+    $totalSpaceGB = [math]::Round($disk.Size / 1GB, 1)
     
-    # Check if user has access to the repository
-    if (-not $SkipAuth) {
+    if ($freeSpaceGB -lt 20) {
+        Write-ErrorCustom "Insufficient disk space: ${freeSpaceGB}GB available, 20GB required"
+        $validationErrors++
+    }
+    else {
+        Write-Success "Disk space: ${freeSpaceGB}GB available of ${totalSpaceGB}GB total ✓"
+    }
+    
+    # Check memory (minimum 4GB)
+    Write-Info "Checking system memory..."
+    $totalMemory = (Get-CimInstance -ClassName Win32_ComputerSystem).TotalPhysicalMemory / 1GB
+    $availableMemory = (Get-CimInstance -ClassName Win32_OperatingSystem).FreePhysicalMemory / 1MB / 1024
+    
+    if ($totalMemory -lt 4) {
+        Write-ErrorCustom "Insufficient memory: $($totalMemory.ToString('N1'))GB total, 4GB required"
+        $validationErrors++
+    }
+    else {
+        Write-Success "Memory: $($totalMemory.ToString('N1'))GB total, $($availableMemory.ToString('N1'))GB available ✓"
+    }
+    
+    # Check CPU cores
+    Write-Info "Checking CPU cores..."
+    $cpuCores = (Get-CimInstance -ClassName Win32_Processor).NumberOfLogicalProcessors
+    if ($cpuCores -lt 2) {
+        Write-Warning "Only $cpuCores CPU core(s) detected. Performance may be limited."
+    }
+    else {
+        Write-Success "CPU cores: $cpuCores ✓"
+    }
+    
+    # Validate Docker
+    Write-Info "Validating Docker installation..."
+    $dockerInstalled = $false
+    
+    if (Get-Command docker -ErrorAction SilentlyContinue) {
+        $dockerInstalled = $true
+        
+        # Check if Docker daemon is running
         try {
-            $repoPath = ($repoUrl -replace 'https://github.com/', '')
-            $null = & gh repo view $repoPath 2>&1
-            Write-Success "Access to repository confirmed!"
+            $dockerInfo = & docker info 2>&1
+            if ($LASTEXITCODE -eq 0) {
+                Write-Success "Docker daemon is running ✓"
+                
+                # Test Docker functionality
+                $testResult = & docker run --rm hello-world 2>&1
+                if ($LASTEXITCODE -eq 0) {
+                    Write-Success "Docker functionality verified ✓"
+                }
+                else {
+                    Write-ErrorCustom "Docker test failed. Please check Docker Desktop."
+                    $validationErrors++
+                }
+            }
+            else {
+                Write-Warning "Docker daemon is not running. Please start Docker Desktop."
+                $validationErrors++
+            }
         }
         catch {
-            Write-ErrorCustom "Cannot access repository: $repoPath"
-            Write-Info "Please ensure you have access to this repository"
-            Write-Host ""
-            Write-Warning "Repository access requires Skool community membership:"
-            Write-Host "  - AI Stack Masters (Free): " -NoNewline -ForegroundColor Yellow
-            Write-Host "https://www.skool.com/ai-stack-masters" -ForegroundColor Cyan
-            Write-Host "  - AI Stack Master Pros (Paid): " -NoNewline -ForegroundColor Yellow  
-            Write-Host "https://www.skool.com/ai-stack-master-pros" -ForegroundColor Cyan
-            throw "Cannot access repository: $repoPath"
+            Write-ErrorCustom "Docker daemon check failed: $($_.Exception.Message)"
+            $validationErrors++
+        }
+    }
+    else {
+        Write-ErrorCustom "Docker is not installed"
+        $validationErrors++
+    }
+    
+    # Check Docker Compose
+    Write-Info "Checking Docker Compose..."
+    if ($dockerInstalled) {
+        try {
+            $composeVersion = & docker compose version 2>&1
+            if ($LASTEXITCODE -eq 0) {
+                Write-Success "Docker Compose available ✓"
+            }
+            else {
+                # Try older docker-compose command
+                $oldComposeVersion = & docker-compose --version 2>&1
+                if ($LASTEXITCODE -eq 0) {
+                    Write-Success "Docker Compose (standalone) available ✓"
+                }
+                else {
+                    Write-ErrorCustom "Docker Compose not found"
+                    $validationErrors++
+                }
+            }
+        }
+        catch {
+            Write-ErrorCustom "Docker Compose check failed"
+            $validationErrors++
         }
     }
     
-    # Create parent directory
-    $null = New-Item -ItemType Directory -Force -Path "C:\StackMasters"
-    
-    # Remove existing directory if present
-    if (Test-Path $cloneDir) {
-        $backupDir = "$cloneDir.backup.$(Get-Date -Format 'yyyyMMddHHmmss')"
-        Write-Warning "Directory $cloneDir already exists. Backing up to $backupDir..."
-        Move-Item $cloneDir $backupDir
-    }
-    
-    # Clone the repository
-    Write-Info "Cloning repository: $repoUrl"
-    try {
-        & gh repo clone $repoUrl $cloneDir
-        Write-Success "Repository cloned to: $cloneDir"
+    # Check port availability
+    Write-Info "Checking port availability..."
+    function Test-PortAvailability {
+        param($Port, $ServiceName)
         
-        # Set environment variable for next steps
-        [Environment]::SetEnvironmentVariable("STACK_MASTERS_DIR", $cloneDir, "Process")
-        
-        return $cloneDir
-    }
-    catch {
-        Write-ErrorCustom "Failed to clone repository: $($_.Exception.Message)"
-        throw "Failed to clone repository: $($_.Exception.Message)"
-    }
-}
-
-function Test-Installation {
-    Write-Info "Validating installation..."
-    
-    $errors = New-Object System.Collections.ArrayList
-    
-    # Test Git
-    try {
-        $gitVersion = & git --version
-        Write-Success "Git is working: $gitVersion"
-    }
-    catch {
-        $null = $errors.Add("Git test failed")
+        $tcpConnection = Get-NetTCPConnection -LocalPort $Port -ErrorAction SilentlyContinue
+        if ($tcpConnection) {
+            Write-ErrorCustom "Port $Port is already in use (required for $ServiceName)"
+            return $false
+        }
+        return $true
     }
     
-    # Test GitHub CLI
-    try {
-        $ghVersion = & gh --version | Select-Object -First 1
-        Write-Success "GitHub CLI is working: $ghVersion"
-    }
-    catch {
-        $null = $errors.Add("GitHub CLI test failed")
-    }
-    
-    # Test Docker (may not work until restart)
-    try {
-        $dockerVersion = & docker --version
-        Write-Success "Docker is working: $dockerVersion"
-    }
-    catch {
-        Write-Warning "Docker test failed - may require system restart"
-    }
-    
-    # Check disk space
-    $freeSpace = (Get-CimInstance -ClassName Win32_LogicalDisk -Filter "DeviceID='C:'").FreeSpace / 1GB
-    if ($freeSpace -lt 20) {
-        Write-Warning "Low disk space: $($freeSpace.ToString('N1'))GB available (recommended: 20GB+)"
+    # Check wizard port
+    if (Test-PortAvailability -Port 8080 -ServiceName "Provisioning Wizard") {
+        Write-Success "Port 8080 available for wizard ✓"
     }
     else {
-        Write-Success "Disk space adequate: $($freeSpace.ToString('N1'))GB available"
+        $validationErrors++
     }
     
-    # Check memory
-    $totalMemory = (Get-CimInstance -ClassName Win32_ComputerSystem).TotalPhysicalMemory / 1GB
-    if ($totalMemory -lt 4) {
-        Write-Warning "Low memory: $($totalMemory.ToString('N1'))GB available (recommended: 4GB+)"
-    }
-    else {
-        Write-Success "Memory adequate: $($totalMemory.ToString('N1'))GB available"
+    # Check other ports (warnings only)
+    $warningPorts = @(80, 443, 3000, 5678, 9090)
+    foreach ($port in $warningPorts) {
+        if (-not (Test-PortAvailability -Port $port -ServiceName "Stack Services")) {
+            Write-Warning "Port $port is in use. This may cause conflicts during deployment."
+        }
     }
     
-    if ($errors.Count -eq 0) {
-        Write-Success "All validation tests passed"
+    # Test internet connectivity
+    Write-Info "Checking internet connectivity..."
+    try {
+        $response = Invoke-WebRequest -Uri "https://github.com" -Method Head -TimeoutSec 5 -UseBasicParsing
+        if ($response.StatusCode -eq 200) {
+            Write-Success "Internet connectivity verified ✓"
+        }
+    }
+    catch {
+        Write-ErrorCustom "No internet connectivity detected. Please check your network connection."
+        $validationErrors++
+    }
+    
+    # Check if running as Administrator
+    if (-not (Test-Administrator)) {
+        Write-ErrorCustom "This script must be run as Administrator"
+        $validationErrors++
     }
     else {
-        Write-ErrorCustom "Validation errors: $($errors -join ', ')"
+        Write-Success "Running with Administrator privileges ✓"
+    }
+    
+    # Check Windows version
+    $osInfo = Get-CimInstance -ClassName Win32_OperatingSystem
+    $osVersion = [Version]$osInfo.Version
+    if ($osVersion.Major -lt 10) {
+        Write-Warning "Windows version may not be fully supported: $($osInfo.Caption)"
+    }
+    else {
+        Write-Success "Windows version supported: $($osInfo.Caption) ✓"
+    }
+    
+    # Summary
+    Write-Host ""
+    if ($validationErrors -eq 0) {
+        Write-Success "All system validation checks passed! ✓"
+        return $true
+    }
+    else {
+        Write-ErrorCustom "System validation failed with $validationErrors error(s)"
+        Write-Info "Please resolve the issues above and try again"
+        return $false
     }
 }
 
@@ -892,18 +899,16 @@ function Main {
     # Configure system
     Configure-Firewall
     
-    # GitHub authentication
-    Authenticate-GitHub
-    
-    # Clone the repository
-    [string]$cloneDir = Clone-Repository
+    # Run comprehensive system validation
+    Write-Info "Performing system validation..."
+    if (-not (Test-SystemRequirements)) {
+        Write-ErrorCustom "System validation failed. Please fix the issues and try again."
+        exit 1
+    }
     
     # Setup and start provisioning wizard
     $wizardDir = Setup-ProvisioningWizard
-    Start-ProvisioningWizard -WizardDir $wizardDir -CloneDir $cloneDir
-    
-    # Validate installation
-    Test-Installation
+    Start-ProvisioningWizard -WizardDir $wizardDir
     
     Write-Host ""
     Write-Host "================================================"
@@ -919,11 +924,11 @@ function Main {
     Write-Host "  3. Follow the guided setup process"
     Write-Host ""
     Write-Info "The wizard will handle:"
+    Write-Host "  - GitHub authentication"
+    Write-Host "  - Repository selection and cloning"
     Write-Host "  - Environment configuration"
     Write-Host "  - Service deployment"
     Write-Host "  - SSL certificate setup"
-    Write-Host ""
-    Write-Info "Repository cloned to: $cloneDir"
     Write-Host ""
     Write-Info "Log file saved to: $script:LogFile"
 }

@@ -5,6 +5,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const fsPromises = require('fs').promises;
 const path = require('path');
+const os = require('os');
 const { spawn } = require('child_process');
 const { safeExecute, isSafeValue, sanitizeValue } = require('./utils/safe-execute');
 const { validateDeploymentConfig, checkPortConflicts } = require('./validators');
@@ -17,6 +18,9 @@ const DeploymentSnapshot = require('./utils/deployment-snapshot');
 const DeploymentCheckpoint = require('./utils/deployment-checkpoint');
 const DeploymentTelemetry = require('./utils/deployment-telemetry');
 
+// Platform abstraction layer
+const { platform } = require('./platform');
+
 // Add security imports
 const cookieParser = require('cookie-parser');
 const ProvisioningSecurity = require('./security');
@@ -26,7 +30,10 @@ const { globalInputSanitizer, validators } = require('./middleware/input-validat
 const security = new ProvisioningSecurity();
 
 const app = express();
+
+// Platform-aware configuration
 const PORT = process.env.PORT || 8080;
+const HOST = process.env.HOST || (platform.isDesktopEnvironment() ? 'localhost' : '0.0.0.0');
 
 // Create HTTP server for WebSocket support
 const server = require('http').createServer(app);
@@ -1831,6 +1838,235 @@ app.post('/api/deployments/:id/rollback', async (req, res) => {
   }
 });
 
+// GitHub authentication endpoints
+app.post('/api/github/device-auth', async (req, res) => {
+  try {
+    // Use platform abstraction to execute gh CLI command
+    const result = await platform.executeCommand('gh auth login --web --skip-ssh-key', {
+      env: { ...process.env, GH_PROMPT: 'disabled' }
+    });
+    
+    // Extract device code from output
+    const deviceCodeMatch = result.stdout.match(/Device code: ([A-Z0-9-]+)/);
+    const deviceCode = deviceCodeMatch ? deviceCodeMatch[1] : null;
+    
+    if (deviceCode) {
+      res.json({
+        success: true,
+        deviceCode,
+        verificationUrl: 'https://github.com/login/device',
+        message: 'Please visit the verification URL and enter the device code'
+      });
+    } else {
+      // Try device flow directly
+      const deviceResult = await platform.executeCommand('gh auth login --device', {
+        env: { ...process.env, GH_PROMPT: 'disabled' }
+      });
+      
+      const codeMatch = deviceResult.stdout.match(/code: ([A-Z0-9-]+)/);
+      res.json({
+        success: true,
+        deviceCode: codeMatch ? codeMatch[1] : 'Check terminal output',
+        verificationUrl: 'https://github.com/login/device',
+        message: 'Please check the terminal for the device code'
+      });
+    }
+  } catch (error) {
+    res.status(500).json({
+      error: 'Failed to initiate GitHub authentication',
+      message: error.message
+    });
+  }
+});
+
+// Check GitHub authentication status
+app.get('/api/github/auth-status', async (req, res) => {
+  try {
+    const result = await platform.executeCommand('gh auth status');
+    const isAuthenticated = result.success && result.stdout.includes('Logged in');
+    
+    if (isAuthenticated) {
+      // Get authenticated user info
+      const userResult = await platform.executeCommand('gh api user');
+      const userInfo = userResult.success ? JSON.parse(userResult.stdout) : null;
+      
+      res.json({
+        authenticated: true,
+        username: userInfo?.login,
+        name: userInfo?.name,
+        email: userInfo?.email
+      });
+    } else {
+      res.json({
+        authenticated: false
+      });
+    }
+  } catch (error) {
+    res.json({
+      authenticated: false,
+      error: error.message
+    });
+  }
+});
+
+// List GitHub repositories
+app.get('/api/github/repositories', async (req, res) => {
+  try {
+    // Check authentication first
+    const authResult = await platform.executeCommand('gh auth status');
+    if (!authResult.success || !authResult.stdout.includes('Logged in')) {
+      return res.status(401).json({
+        error: 'Not authenticated with GitHub'
+      });
+    }
+    
+    // List repositories
+    const reposResult = await platform.executeCommand(
+      'gh repo list --limit 100 --json name,description,isPrivate,url'
+    );
+    
+    if (reposResult.success) {
+      const repos = JSON.parse(reposResult.stdout);
+      res.json({
+        success: true,
+        repositories: repos
+      });
+    } else {
+      res.status(500).json({
+        error: 'Failed to list repositories',
+        message: reposResult.error
+      });
+    }
+  } catch (error) {
+    res.status(500).json({
+      error: 'Failed to list repositories',
+      message: error.message
+    });
+  }
+});
+
+// Clone GitHub repository
+app.post('/api/github/clone', validators.validateGitHubClone, async (req, res) => {
+  try {
+    const { repositoryUrl, targetPath } = req.body;
+    
+    // Validate repository URL format
+    if (!repositoryUrl.match(/^https:\/\/github\.com\/[\w-]+\/[\w-]+$/)) {
+      return res.status(400).json({
+        error: 'Invalid GitHub repository URL format'
+      });
+    }
+    
+    // Extract repo path from URL
+    const repoPath = repositoryUrl.replace('https://github.com/', '');
+    
+    // Check if user has access to the repository
+    const accessResult = await platform.executeCommand(`gh repo view ${repoPath}`);
+    if (!accessResult.success) {
+      return res.status(403).json({
+        error: 'Cannot access repository',
+        message: 'Please ensure you have access to this repository'
+      });
+    }
+    
+    // Determine target directory
+    const cloneDir = targetPath || path.join('/opt', path.basename(repositoryUrl, '.git'));
+    
+    // Check if directory already exists
+    if (fs.existsSync(cloneDir)) {
+      const backupDir = `${cloneDir}.backup.${Date.now()}`;
+      await fsPromises.rename(cloneDir, backupDir);
+    }
+    
+    // Clone the repository
+    const cloneResult = await platform.executeCommand(
+      `gh repo clone ${repoPath} ${cloneDir}`
+    );
+    
+    if (cloneResult.success) {
+      res.json({
+        success: true,
+        message: 'Repository cloned successfully',
+        path: cloneDir
+      });
+    } else {
+      res.status(500).json({
+        error: 'Failed to clone repository',
+        message: cloneResult.error
+      });
+    }
+  } catch (error) {
+    res.status(500).json({
+      error: 'Failed to clone repository',
+      message: error.message
+    });
+  }
+});
+
+// System validation endpoint
+app.get('/api/system/validate', async (req, res) => {
+  try {
+    const validation = {
+      platform: platform.getPlatformName(),
+      checks: {}
+    };
+    
+    // Check disk space
+    const dfResult = await platform.executeCommand('df -BG /opt');
+    if (dfResult.success) {
+      const spaceMatch = dfResult.stdout.match(/(\d+)G\s+\d+%/);
+      validation.checks.diskSpace = {
+        available: spaceMatch ? parseInt(spaceMatch[1]) : 0,
+        required: 20,
+        status: spaceMatch && parseInt(spaceMatch[1]) >= 20 ? 'pass' : 'fail'
+      };
+    }
+    
+    // Check memory
+    const memResult = await platform.executeCommand('free -g');
+    if (memResult.success) {
+      const memMatch = memResult.stdout.match(/Mem:\s+(\d+)/);
+      validation.checks.memory = {
+        total: memMatch ? parseInt(memMatch[1]) : 0,
+        required: 4,
+        status: memMatch && parseInt(memMatch[1]) >= 4 ? 'pass' : 'fail'
+      };
+    }
+    
+    // Check Docker
+    const dockerInfo = await platform.getDockerInfo();
+    validation.checks.docker = {
+      installed: !!dockerInfo.version,
+      running: dockerInfo.running,
+      status: dockerInfo.running ? 'pass' : 'fail'
+    };
+    
+    // Check ports
+    const ports = [8080, 80, 443, 3000, 5678, 9090];
+    validation.checks.ports = {};
+    
+    for (const port of ports) {
+      const available = await platform.isPortAvailable(port);
+      validation.checks.ports[port] = {
+        available,
+        status: available || port !== 8080 ? 'pass' : 'fail'
+      };
+    }
+    
+    // Overall status
+    validation.status = Object.values(validation.checks).every(
+      check => check.status === 'pass'
+    ) ? 'pass' : 'fail';
+    
+    res.json(validation);
+  } catch (error) {
+    res.status(500).json({
+      error: 'System validation failed',
+      message: error.message
+    });
+  }
+});
+
 // Serve static logo image
 app.get('/logo.png', (req, res) => {
   const logoPath = path.join(__dirname, 'stack-master-logo.png');
@@ -1934,17 +2170,43 @@ app.get('/', (req, res) => {
   }
 });
 
+// Helper function to display access URLs
+function displayAccessUrls() {
+  console.log('\n════════════════════════════════════════════════════════');
+  console.log('🚀 Stack Masters Setup Wizard Ready!');
+  console.log('════════════════════════════════════════════════════════');
+  
+  if (HOST === '0.0.0.0') {
+    console.log('\n📡 Access the wizard from:');
+    console.log(`   • This machine: http://localhost:${PORT}`);
+    
+    // Show all network interfaces
+    const interfaces = os.networkInterfaces();
+    Object.keys(interfaces).forEach(name => {
+      interfaces[name].forEach(iface => {
+        if (iface.family === 'IPv4' && !iface.internal) {
+          console.log(`   • Local network: http://${iface.address}:${PORT}`);
+        }
+      });
+    });
+    
+    // Show public IP if available
+    const publicIP = process.env.PUBLIC_IP;
+    if (publicIP) {
+      console.log(`   • Internet: http://${publicIP}:${PORT}`);
+    }
+  } else {
+    console.log(`\n📡 Access the wizard at: http://localhost:${PORT}`);
+  }
+  
+  console.log('\n⚠️  Keep this terminal open while using the wizard');
+  console.log('════════════════════════════════════════════════════════\n');
+}
+
 // Start server
 loadDeploymentStates().then(() => {
-  server.listen(PORT, () => {
-    console.log(`
-🚀 AI Stack Master Provisioning Server
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🌐 Web UI:     http://localhost:${PORT}
-📡 WebSocket:  ws://localhost:${PORT}
-🔧 API:        http://localhost:${PORT}/api
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    `);
+  server.listen(PORT, HOST, () => {
+    displayAccessUrls();
     
     // Start idle timeout monitoring
     security.startIdleTimer();

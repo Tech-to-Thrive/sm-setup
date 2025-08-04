@@ -492,55 +492,11 @@ configure_server_firewall() {
     log_success "Firewall configuration complete"
 }
 
-# GitHub authentication
-github_auth() {
-    log_info "Setting up GitHub authentication..."
-    
-    # Check if already authenticated
-    if gh auth status &> /dev/null; then
-        log_success "GitHub CLI already authenticated"
-        return
-    fi
-    
-    echo ""
-    log_info "GitHub authentication required for repository access"
-    
-    # Detect server environment (SSH, no display, or --server flag)
-    if [[ -n "${SSH_CONNECTION:-}" ]] || [[ -z "${DISPLAY:-}" ]] || [[ "$DEPLOYMENT_MODE" == "1" ]]; then
-        log_info "Server environment detected - using device code authentication"
-        echo ""
-        echo "=========================================="
-        log_info "GITHUB AUTHENTICATION REQUIRED"
-        echo "=========================================="
-        echo ""
-        log_info "1. GitHub will display a device code below"
-        log_info "2. Copy the device code"
-        log_info "3. Visit: https://github.com/login/device"
-        log_info "4. Paste the code and complete authentication"
-        echo ""
-        echo "Starting GitHub authentication..."
-        echo ""
-        
-        gh auth login
-    else
-        log_info "Desktop environment detected - opening browser for authentication"
-        log_info "If browser doesn't open, you'll see a device code to enter at: https://github.com/login/device"
-        echo ""
-        
-        # Try browser auth first, fallback to device code
-        if ! timeout 30 gh auth login --web 2>/dev/null; then
-            log_info "Browser authentication failed or timed out, using device code flow..."
-            gh auth login
-        fi
-    fi
-    
-    if gh auth status &> /dev/null; then
-        log_success "GitHub authentication successful"
-    else
-        log_error "GitHub authentication failed"
-        exit 1
-    fi
-}
+# GitHub authentication is now handled by the web wizard
+# This function is kept for reference but no longer used
+# github_auth() {
+#     # Moved to web wizard
+# }
 
 # Setup provisioning wizard
 setup_provisioning_wizard() {
@@ -631,9 +587,10 @@ start_provisioning_wizard() {
     npm install --production
     
     # Set environment variables
-    export PROJECT_ROOT="$CLONE_DIR"
+    # PROJECT_ROOT will be set after cloning via web wizard
     export PORT="8080"
     export NODE_ENV="production"
+    export HOST=$([ "$OS_TYPE" = "desktop" ] && echo "localhost" || echo "0.0.0.0")
     
     log_info "Starting provisioning wizard on port 8080..."
     
@@ -656,7 +613,7 @@ start_provisioning_wizard() {
     echo -e "${GREEN}========================================${NC}"
     echo ""
     echo -e "${YELLOW}Access the wizard at:${NC}"
-    echo -e "  ${BLUE}http://localhost:${WIZARD_PORT}${NC}"
+    echo -e "  ${BLUE}http://localhost:8080${NC}"
     echo ""
     
     # Get server IPs for remote access
@@ -669,7 +626,7 @@ start_provisioning_wizard() {
     if [ -n "$SERVER_IPS" ]; then
         echo -e "${YELLOW}From a remote machine:${NC}"
         for ip in $SERVER_IPS; do
-            echo -e "  ${BLUE}http://${ip}:${WIZARD_PORT}${NC}"
+            echo -e "  ${BLUE}http://${ip}:8080${NC}"
         done
     fi
     echo ""
@@ -680,96 +637,166 @@ start_provisioning_wizard() {
     echo ""
 }
 
-# Clone appropriate repository (called from wizard)
-clone_repository() {
-    log_info "Repository Setup"
-    echo ""
-    echo "Please provide the GitHub repository URL to clone."
-    echo ""
-    echo -e "${YELLOW}Examples:${NC}"
-    echo -e "  ${BLUE}- https://github.com/AI-Stack-Masters/stack-community${NC}"
-    echo -e "  ${BLUE}- https://github.com/AI-Stack-Master-Pros/stack-pro${NC}"
-    echo ""
-    echo -e "${YELLOW}NOTE: Repository access requires Skool community membership:${NC}"
-    echo -e "  - AI Stack Masters (Free):  ${BLUE}https://www.skool.com/ai-stack-masters${NC}"
-    echo -e "  - AI Stack Master Pros (Paid): ${BLUE}https://www.skool.com/ai-stack-master-pros${NC}"
-    echo ""
-    
-    read -p "Repository URL: " REPO_URL
-    
-    # Validate URL format
-    if [[ ! "$REPO_URL" =~ ^https://github\.com/[^/]+/[^/]+$ ]]; then
-        log_error "Invalid GitHub repository URL format"
-        log_info "Expected format: https://github.com/owner/repository"
-        exit 1
-    fi
-    
-    # Extract repository name from URL
-    REPO_NAME=$(basename "$REPO_URL" .git)
-    REPO_OWNER=$(echo "$REPO_URL" | sed -E 's|https://github.com/([^/]+)/.*|\1|')
-    REPO_PATH="$REPO_OWNER/$REPO_NAME"
-    
-    log_info "Repository: $REPO_PATH"
-    
-    # Check if user has access to the repository
-    if gh repo view "$REPO_PATH" &> /dev/null; then
-        log_success "Access to $REPO_NAME confirmed!"
-    else
-        log_error "Cannot access repository: $REPO_PATH"
-        log_info "Please ensure you have access to this repository"
-        echo ""
-        log_warning "Repository access requires Skool community membership:"
-        echo -e "  ${YELLOW}- AI Stack Masters (Free): ${BLUE}https://www.skool.com/ai-stack-masters${NC}"
-        echo -e "  ${YELLOW}- AI Stack Master Pros (Paid): ${BLUE}https://www.skool.com/ai-stack-master-pros${NC}"
-        exit 1
-    fi
-    
-    # Set clone directory
-    CLONE_DIR="/opt/$REPO_NAME"
-    
-    # Remove existing directory if present
-    if [ -d "$CLONE_DIR" ]; then
-        log_warning "Directory $CLONE_DIR already exists. Backing up..."
-        mv "$CLONE_DIR" "${CLONE_DIR}.backup.$(date +%Y%m%d%H%M%S)"
-    fi
-    
-    # Clone the repository
-    log_info "Cloning repository: $REPO_PATH"
-    gh repo clone "$REPO_PATH" "$CLONE_DIR"
-    
-    log_success "Repository cloned to: $CLONE_DIR"
-    
-    # Export for use in subsequent scripts
-    export STACK_DIR=$CLONE_DIR
-    export CLONE_DIR=$CLONE_DIR
-}
+# Repository cloning is now handled by the web wizard
+# This function is kept for reference but no longer used
+# clone_repository() {
+#     # Moved to web wizard - handled via /api/github/clone endpoint
+# }
 
-# System validation
-validate_system() {
-    log_info "Validating system configuration..."
+# Comprehensive system validation
+validate_system_requirements() {
+    log_info "Running comprehensive system validation..."
     
-    # Check Docker
-    if docker run --rm hello-world &> /dev/null; then
-        log_success "Docker is working correctly"
+    local validation_errors=0
+    
+    # Check disk space (minimum 20GB)
+    log_info "Checking disk space..."
+    AVAILABLE_SPACE=$(df -BG /opt 2>/dev/null | tail -1 | awk '{print $4}' | sed 's/G//')
+    if [ -z "$AVAILABLE_SPACE" ] || [ "$AVAILABLE_SPACE" -lt 20 ]; then
+        log_error "Insufficient disk space: ${AVAILABLE_SPACE:-0}GB available, 20GB required"
+        ((validation_errors++))
     else
-        log_error "Docker test failed"
-        exit 1
+        log_success "Disk space: ${AVAILABLE_SPACE}GB available ✓"
     fi
     
-    # Check disk space
-    AVAILABLE_SPACE=$(df -BG /opt | tail -1 | awk '{print $4}' | sed 's/G//')
-    if [ "$AVAILABLE_SPACE" -lt 20 ]; then
-        log_warning "Low disk space: ${AVAILABLE_SPACE}GB available (recommended: 20GB+)"
-    else
-        log_success "Disk space adequate: ${AVAILABLE_SPACE}GB available"
-    fi
-    
-    # Check memory
+    # Check memory (minimum 4GB)
+    log_info "Checking system memory..."
     TOTAL_MEM=$(free -g | awk '/^Mem:/{print $2}')
+    AVAILABLE_MEM=$(free -g | awk '/^Mem:/{print $7}')
     if [ "$TOTAL_MEM" -lt 4 ]; then
-        log_warning "Low memory: ${TOTAL_MEM}GB available (recommended: 4GB+)"
+        log_error "Insufficient memory: ${TOTAL_MEM}GB total, 4GB required"
+        ((validation_errors++))
     else
-        log_success "Memory adequate: ${TOTAL_MEM}GB available"
+        log_success "Memory: ${TOTAL_MEM}GB total, ${AVAILABLE_MEM}GB available ✓"
+    fi
+    
+    # Check CPU cores (recommend at least 2)
+    log_info "Checking CPU cores..."
+    CPU_CORES=$(nproc)
+    if [ "$CPU_CORES" -lt 2 ]; then
+        log_warning "Only $CPU_CORES CPU core(s) detected. Performance may be limited."
+    else
+        log_success "CPU cores: $CPU_CORES ✓"
+    fi
+    
+    # Validate Docker daemon
+    log_info "Validating Docker installation..."
+    if ! command -v docker &> /dev/null; then
+        log_error "Docker is not installed"
+        ((validation_errors++))
+    else
+        # Check if Docker daemon is running
+        if ! docker info >/dev/null 2>&1; then
+            log_warning "Docker daemon is not running. Attempting to start..."
+            if command -v systemctl &> /dev/null; then
+                systemctl start docker 2>/dev/null || true
+                systemctl enable docker 2>/dev/null || true
+            elif command -v service &> /dev/null; then
+                service docker start 2>/dev/null || true
+            fi
+            
+            # Wait and retry
+            sleep 3
+            if ! docker info >/dev/null 2>&1; then
+                log_error "Failed to start Docker daemon"
+                ((validation_errors++))
+            else
+                log_success "Docker daemon started successfully ✓"
+            fi
+        else
+            log_success "Docker daemon is running ✓"
+        fi
+        
+        # Test Docker functionality
+        if docker info >/dev/null 2>&1; then
+            if ! docker run --rm hello-world >/dev/null 2>&1; then
+                log_error "Docker test failed. Please check Docker installation."
+                ((validation_errors++))
+            else
+                log_success "Docker functionality verified ✓"
+            fi
+        fi
+    fi
+    
+    # Check Docker Compose
+    log_info "Checking Docker Compose..."
+    if command -v docker &> /dev/null && docker compose version &> /dev/null; then
+        COMPOSE_VERSION=$(docker compose version --short 2>/dev/null)
+        log_success "Docker Compose v2 available: $COMPOSE_VERSION ✓"
+    elif command -v docker-compose &> /dev/null; then
+        COMPOSE_VERSION=$(docker-compose --version | awk '{print $3}' | sed 's/,$//')
+        log_success "Docker Compose v1 available: $COMPOSE_VERSION ✓"
+    else
+        log_error "Docker Compose not found"
+        ((validation_errors++))
+    fi
+    
+    # Check critical ports availability
+    log_info "Checking port availability..."
+    check_port_availability() {
+        local port=$1
+        local service=$2
+        
+        if command -v lsof &> /dev/null; then
+            if lsof -i:$port >/dev/null 2>&1; then
+                log_error "Port $port is already in use (required for $service)"
+                return 1
+            fi
+        elif command -v netstat &> /dev/null; then
+            if netstat -tuln 2>/dev/null | grep -q ":$port "; then
+                log_error "Port $port is already in use (required for $service)"
+                return 1
+            fi
+        elif command -v ss &> /dev/null; then
+            if ss -tuln 2>/dev/null | grep -q ":$port "; then
+                log_error "Port $port is already in use (required for $service)"
+                return 1
+            fi
+        fi
+        return 0
+    }
+    
+    # Check wizard port
+    if ! check_port_availability 8080 "Provisioning Wizard"; then
+        ((validation_errors++))
+    else
+        log_success "Port 8080 available for wizard ✓"
+    fi
+    
+    # Check other critical ports (warnings only)
+    local WARNING_PORTS=(80 443 3000 5678 9090)
+    for port in "${WARNING_PORTS[@]}"; do
+        if ! check_port_availability $port "Stack Services" 2>/dev/null; then
+            log_warning "Port $port is in use. This may cause conflicts during deployment."
+        fi
+    done
+    
+    # Test internet connectivity
+    log_info "Checking internet connectivity..."
+    if ! curl -s --head --connect-timeout 5 https://github.com >/dev/null; then
+        log_error "No internet connectivity detected. Please check your network connection."
+        ((validation_errors++))
+    else
+        log_success "Internet connectivity verified ✓"
+    fi
+    
+    # Check if running as root
+    if [[ $EUID -ne 0 ]]; then
+        log_error "This script must be run as root"
+        ((validation_errors++))
+    else
+        log_success "Running with root privileges ✓"
+    fi
+    
+    # Summary
+    echo ""
+    if [ $validation_errors -eq 0 ]; then
+        log_success "All system validation checks passed! ✓"
+        return 0
+    else
+        log_error "System validation failed with $validation_errors error(s)"
+        log_info "Please resolve the issues above and try again"
+        return 1
     fi
 }
 
@@ -836,18 +863,16 @@ main() {
     # Configure system
     configure_firewall
     
-    # GitHub authentication
-    github_auth
-    
-    # Clone the repository
-    clone_repository
+    # Run comprehensive validation before proceeding
+    log_info "Performing system validation..."
+    if ! validate_system_requirements; then
+        log_error "System validation failed. Please fix the issues and try again."
+        exit 1
+    fi
     
     # Setup and start provisioning wizard
     setup_provisioning_wizard
     start_provisioning_wizard
-    
-    # Validate installation
-    validate_system
     
     echo ""
     echo "=============================================="
@@ -863,11 +888,11 @@ main() {
     echo "  3. Follow the guided setup process"
     echo ""
     log_info "The wizard will handle:"
+    echo "  - GitHub authentication"
+    echo "  - Repository selection and cloning"
     echo "  - Environment configuration" 
     echo "  - Service deployment"
     echo "  - SSL certificate setup"
-    echo ""
-    log_info "Repository cloned to: $CLONE_DIR"
     echo ""
 }
 

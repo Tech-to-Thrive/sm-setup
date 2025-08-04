@@ -1,40 +1,25 @@
 # Stack Masters Setup
 
-Universal provisioning scripts for Stack Masters deployment across any Linux/Windows server.
+One-command installation for Stack Masters. WordPress-simple, enterprise-ready.
 
 ## 🎯 **Pick Your Setup:**
 
-### **🖥️ VPS/Server Deployment** (Production)
-*Hostinger, DigitalOcean, AWS, Google Cloud, etc.*
-
-**Linux/Unix:**
-```bash
-curl -fsSL https://raw.githubusercontent.com/Tech-to-Thrive/sm-setup/main/setup.sh | bash -s -- --server
-```
-
-**Windows Server:**
-```powershell
-Invoke-WebRequest -Uri "https://raw.githubusercontent.com/Tech-to-Thrive/sm-setup/main/setup-windows.ps1" -OutFile "setup-windows.ps1"; .\setup-windows.ps1 -Server
-```
-
-### **💻 Local Development**
-*Mac, Windows Desktop, Linux Desktop*
+### **🚀 Quick Install**
 
 **Linux/Mac:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Tech-to-Thrive/sm-setup/main/setup.sh | bash -s -- --local
+curl -fsSL https://raw.githubusercontent.com/Tech-to-Thrive/sm-setup/main/setup.sh | bash
 ```
 
-**Windows Desktop:**
+**Windows:**
 ```powershell
-Invoke-WebRequest -Uri "https://raw.githubusercontent.com/Tech-to-Thrive/sm-setup/main/setup-windows.ps1" -OutFile "setup-windows.ps1"; .\setup-windows.ps1 -Local
+iwr -useb https://raw.githubusercontent.com/Tech-to-Thrive/sm-setup/main/setup-windows.ps1 | iex
 ```
 
----
-
-### **What's the Difference?**
-- **VPS/Server**: Opens firewall ports, configures security for internet access
-- **Local Dev**: Skips firewall, perfect for localhost development
+That's it! The script automatically detects your environment:
+- ✅ **Servers** - Configures firewall, binds to all interfaces
+- ✅ **Desktops** - Skips firewall, localhost only
+- ✅ **All systems** - Validates requirements, installs dependencies, launches web wizard
 
 ## 📚 Documentation
 
@@ -56,37 +41,31 @@ Ubuntu, Debian, CentOS, Rocky Linux, AlmaLinux, openSUSE, Arch Linux, Windows Se
 ### Package Managers
 apt, yum/dnf, pacman, zypper, winget (Windows Package Manager)
 
-## 🛠️ What Gets Installed
+## 🎯 How It Works
 
-- **Git** - Version control
-- **Docker** - Container runtime with Docker Compose  
-- **GitHub CLI** - Repository management and authentication
-- **System utilities** - curl, wget, build tools
-- **Firewall configuration** - Secure port setup (80, 443, 8080)
+1. **Run one command** - Setup script validates your system
+2. **Open your browser** - Go to the URL shown (e.g., http://your-ip:8080)
+3. **Follow the wizard** - Authenticate GitHub, select repository, configure, deploy
+4. **Stack is running** - Everything configured and deployed automatically
 
-## 🎯 **What's the Difference?**
+## 📋 What Gets Installed
 
-### **VPS/Server Mode** (Default)
-- ✅ **Opens firewall ports** for web access and Stack Masters services
-- ✅ **Configures security** for internet-facing deployment
-- ✅ **Perfect for**: Production, staging, public VPS
+- **Minimal dependencies** - Only what's absolutely needed
+- **Pre-validated** - All requirements checked upfront
+- **Platform-aware** - Works on Linux, Windows, macOS
+- **Zero build time** - Pre-compiled wizard, no npm builds
 
-### **Local Development Mode**
-- ✅ **Skips firewall config** - uses your local system settings
-- ✅ **Installs everything** - Git, Docker, GitHub CLI
-- ✅ **Perfect for**: Mac, Windows Desktop, Linux Desktop development
-
-## 🔧 Advanced Usage
+## 🔧 Advanced Options
 
 ```bash
-# Test multiple operating systems
-./multi-os-test.sh all
+# Force server mode on desktop
+./setup.sh --server
 
-# Keep test instances for inspection
-KEEP_INSTANCES=true ./multi-os-test.sh rocky9
+# Force local mode on server  
+./setup.sh --local
 
-# Windows with specific repository
-.\setup-windows.ps1 -RepoUrl "https://github.com/Tech-to-Thrive/stack-masters"
+# Windows specific mode
+.\setup-windows.ps1 -Mode server
 ```
 
 ## 📊 Testing Status
@@ -96,12 +75,17 @@ KEEP_INSTANCES=true ./multi-os-test.sh rocky9
 ✅ **Automated testing infrastructure**  
 ✅ **Multi-provider validation**
 
-## 🤝 Contributing
+## 📁 Clean Structure
 
-- Scripts in root directory
-- Documentation in `docs/` directory
-- Test results in `test-results/` (git-ignored)
-- See `docs/INDEX.md` for complete structure
+```
+sm-setup/
+├── README.md           # You are here
+├── setup.sh           # Linux/Mac installer
+├── setup-windows.ps1  # Windows installer
+├── apps/              # Provisioning wizard
+├── docs/              # Documentation
+└── scripts/           # Supporting scripts
+```
 
 ## 📞 Support
 

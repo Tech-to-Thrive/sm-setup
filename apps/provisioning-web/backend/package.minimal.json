@@ -1,0 +1,32 @@
+{
+  "name": "stack-masters-provisioning-wizard",
+  "version": "2.0.0",
+  "description": "Stack Masters web-based provisioning wizard",
+  "main": "server-integrated.js",
+  "scripts": {
+    "start": "node server-integrated.js",
+    "start:dev": "NODE_ENV=development node server-integrated.js"
+  },
+  "dependencies": {
+    "cookie-parser": "^1.4.7",
+    "express": "^4.18.2",
+    "express-rate-limit": "^8.0.1",
+    "helmet": "^8.1.0",
+    "ws": "^8.14.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "stack-masters",
+    "provisioning",
+    "wizard",
+    "setup"
+  ],
+  "author": "Stack Masters",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Tech-to-Thrive/sm-setup.git"
+  }
+}
