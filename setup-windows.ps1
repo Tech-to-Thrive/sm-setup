@@ -61,9 +61,13 @@ function Write-ErrorCustom {
     Add-Content -Path $script:LogFile -Value "[$(Get-Date)] ERROR: $Message"
 }
 
-# Initialize logging
-$script:LogFile = "C:\temp\stack-masters-setup.log"
-$null = New-Item -ItemType Directory -Force -Path "C:\temp"
+# Initialize logging in script directory
+$scriptDir = Split-Path -Parent $PSCommandPath
+if ([string]::IsNullOrEmpty($scriptDir)) {
+    # Fallback for when running interactively
+    $scriptDir = (Get-Location).Path
+}
+$script:LogFile = Join-Path $scriptDir "stack-masters-setup.log"
 
 function Show-Help {
     $helpText = @"
@@ -443,7 +447,9 @@ function Configure-Firewall {
 function Configure-ServerFirewall {
     Write-Info "Configuring Windows Firewall for server deployment..."
     
-    [int[]]$ports = @(80, 443, 8080, 3000, 3001, 3002, 5678, 9090, 9999, 587, 465)  # 8080 is for provisioning wizard
+    # Only configure ports actually used by Stack Masters
+    # Removed ports 80 and 443 - not needed by Stack Masters
+    [int[]]$ports = @(8080, 3000, 3001, 3002, 5678, 9090, 9999, 587, 465)  # 8080 is for provisioning wizard
     
     foreach ($port in $ports) {
         $currentPort = $port
@@ -598,16 +604,40 @@ function Start-ProvisioningWizard {
     
     Write-Info "Starting provisioning wizard on port 8080..."
     
-    # Start the backend server
-    $process = Start-Process node -ArgumentList "server-integrated.js" -PassThru -WindowStyle Hidden
+    # Start the backend server in detached mode
+    Write-Info "Starting Node.js server in background..."
+    
+    # Create a detached process that survives script termination
+    $processStartInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $processStartInfo.FileName = "node"
+    $processStartInfo.Arguments = "server-integrated.js"
+    $processStartInfo.WorkingDirectory = $backendDir
+    $processStartInfo.UseShellExecute = $false
+    $processStartInfo.CreateNoWindow = $true
+    $processStartInfo.RedirectStandardOutput = $false
+    $processStartInfo.RedirectStandardError = $false
+    
+    $process = [System.Diagnostics.Process]::Start($processStartInfo)
     
     Write-Info "Provisioning wizard started with PID: $($process.Id)"
     Write-Info "Waiting for server to be ready..."
-    Start-Sleep -Seconds 5
+    Start-Sleep -Seconds 8
     
     # Save PID for potential cleanup
     $pidFile = Join-Path $WizardDir "wizard.pid"
     Set-Content -Path $pidFile -Value $process.Id
+    
+    # Test if server is accessible
+    try {
+        $testResponse = Invoke-WebRequest -Uri "http://localhost:8080/api/health" -TimeoutSec 5 -UseBasicParsing -ErrorAction SilentlyContinue
+        if ($testResponse.StatusCode -eq 200) {
+            Write-Success "Server is responding on port 8080 ✓"
+        } else {
+            Write-Warning "Server may not be fully ready yet. Check http://localhost:8080 in a moment."
+        }
+    } catch {
+        Write-Warning "Unable to verify server status. Please check http://localhost:8080 manually."
+    }
     
     # Display access information
     Write-Success "Provisioning wizard is running!"
@@ -652,15 +682,19 @@ function Test-SystemRequirements {
     
     $validationErrors = 0
     
-    # Check disk space (minimum 20GB)
+    # Check disk space (minimum 10GB - sufficient for Docker images and data)
     Write-Info "Checking disk space..."
     $disk = Get-CimInstance -ClassName Win32_LogicalDisk -Filter "DeviceID='C:'"
     $freeSpaceGB = [math]::Round($disk.FreeSpace / 1GB, 1)
     $totalSpaceGB = [math]::Round($disk.Size / 1GB, 1)
     
-    if ($freeSpaceGB -lt 20) {
-        Write-ErrorCustom "Insufficient disk space: ${freeSpaceGB}GB available, 20GB required"
+    if ($freeSpaceGB -lt 10) {
+        Write-ErrorCustom "Insufficient disk space: ${freeSpaceGB}GB available, 10GB required"
         $validationErrors++
+    }
+    elseif ($freeSpaceGB -lt 15) {
+        Write-Warning "Low disk space: ${freeSpaceGB}GB available. Consider having at least 15GB for optimal performance."
+        Write-Success "Disk space: ${freeSpaceGB}GB available (minimum requirement met) ✓"
     }
     else {
         Write-Success "Disk space: ${freeSpaceGB}GB available of ${totalSpaceGB}GB total ✓"
@@ -774,8 +808,9 @@ function Test-SystemRequirements {
         $validationErrors++
     }
     
-    # Check other ports (warnings only)
-    $warningPorts = @(80, 443, 3000, 5678, 9090)
+    # Check other ports used by Stack Masters services (warnings only)
+    # Removed ports 80 and 443 - not needed by Stack Masters
+    $warningPorts = @(3000, 3001, 5678, 9090)
     foreach ($port in $warningPorts) {
         if (-not (Test-PortAvailability -Port $port -ServiceName "Stack Services")) {
             Write-Warning "Port $port is in use. This may cause conflicts during deployment."
@@ -825,6 +860,159 @@ function Test-SystemRequirements {
         Write-Info "Please resolve the issues above and try again"
         return $false
     }
+}
+
+function Setup-ProvisioningWizard {
+    Write-Info "Setting up Stack Masters Provisioning Wizard..."
+    
+    # Create wizard directory
+    $wizardDir = "C:\StackMasters\provisioning-wizard"
+    if (Test-Path $wizardDir) {
+        Remove-Item -Path $wizardDir -Recurse -Force
+    }
+    New-Item -Path $wizardDir -ItemType Directory -Force | Out-Null
+    
+    # Copy provisioning web app
+    $sourceDir = Join-Path $PSScriptRoot "apps\provisioning-web"
+    if (-not (Test-Path $sourceDir)) {
+        Write-ErrorCustom "Provisioning web app not found at: $sourceDir"
+        throw "Provisioning web app not found"
+    }
+    
+    Copy-Item -Path "$sourceDir\*" -Destination $wizardDir -Recurse -Force
+    Write-Success "Provisioning wizard copied successfully"
+    
+    return $wizardDir
+}
+
+function Start-ProvisioningWizard {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$WizardDir
+    )
+    
+    Write-Info "Starting Stack Masters Provisioning Wizard..."
+    
+    $backendDir = Join-Path $WizardDir "backend"
+    if (-not (Test-Path $backendDir)) {
+        Write-ErrorCustom "Backend directory not found: $backendDir"
+        throw "Backend directory not found"
+    }
+    
+    # Install dependencies
+    Write-Info "Installing dependencies..."
+    Push-Location $backendDir
+    try {
+        $npmOutput = & npm install --production 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            Write-ErrorCustom "npm install failed: $npmOutput"
+            throw "npm install failed"
+        }
+        
+        # Determine host binding
+        $osInfo = Get-WindowsType
+        $hostBinding = if ($osInfo.IsServer -or $Server -or ($Mode -eq "server")) { "0.0.0.0" } else { "localhost" }
+        
+        # Set environment variables
+        $env:HOST = $hostBinding
+        $env:PORT = "8080"
+        $env:NODE_ENV = "production"
+        
+        Write-Info "Starting provisioning wizard on port 8080..."
+        
+        # Create process start info for proper detachment
+        $processInfo = New-Object System.Diagnostics.ProcessStartInfo
+        $processInfo.FileName = "node"
+        $processInfo.Arguments = "server-integrated.js"
+        $processInfo.WorkingDirectory = $backendDir
+        $processInfo.UseShellExecute = $false
+        $processInfo.CreateNoWindow = $true
+        
+        # Set environment variables for the process
+        $processInfo.EnvironmentVariables["HOST"] = $hostBinding
+        $processInfo.EnvironmentVariables["PORT"] = "8080"
+        $processInfo.EnvironmentVariables["NODE_ENV"] = "production"
+        
+        # Start the detached process
+        $process = [System.Diagnostics.Process]::Start($processInfo)
+        Write-Info "Provisioning wizard started with PID: $($process.Id)"
+        
+        # Wait for server to be ready with health check
+        Write-Info "Waiting for server to be ready..."
+        $maxAttempts = 16  # 8 seconds total
+        $attempt = 0
+        $serverReady = $false
+        
+        do {
+            Start-Sleep -Milliseconds 500
+            $attempt++
+            try {
+                $response = Invoke-WebRequest -Uri "http://$hostBinding:8080" -TimeoutSec 2 -ErrorAction SilentlyContinue
+                if ($response.StatusCode -eq 200) {
+                    $serverReady = $true
+                    break
+                }
+            }
+            catch {
+                # Server not ready yet, continue waiting
+            }
+        } while ($attempt -lt $maxAttempts)
+        
+        if ($serverReady) {
+            Write-Success "Provisioning wizard is running!"
+            Show-WizardAccessInfo -HostBinding $hostBinding
+        }
+        else {
+            Write-Warning "Server may still be starting up. Check the process manually."
+            Show-WizardAccessInfo -HostBinding $hostBinding
+        }
+    }
+    finally {
+        Pop-Location
+    }
+}
+
+function Show-WizardAccessInfo {
+    param([string]$HostBinding)
+    
+    Write-Host ""
+    Write-Host "========================================" -ForegroundColor Cyan
+    Write-Host "Stack Masters Provisioning Wizard" -ForegroundColor Cyan
+    Write-Host "========================================" -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "Access the wizard at:" -ForegroundColor Green
+    
+    if ($HostBinding -eq "localhost") {
+        Write-Host "  http://localhost:8080" -ForegroundColor Yellow
+    }
+    else {
+        Write-Host "  http://localhost:8080" -ForegroundColor Yellow
+        
+        # Show network interfaces for remote access
+        try {
+            $networkAdapters = Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.IPAddress -ne "127.0.0.1" -and $_.PrefixOrigin -eq "Dhcp" -or $_.PrefixOrigin -eq "Manual" }
+            if ($networkAdapters) {
+                Write-Host ""
+                Write-Host "From a remote machine:" -ForegroundColor Green
+                foreach ($adapter in $networkAdapters) {
+                    Write-Host "  http://$($adapter.IPAddress):8080" -ForegroundColor Yellow
+                }
+            }
+        }
+        catch {
+            # Fallback if network detection fails
+            Write-Host ""
+            Write-Host "From a remote machine:" -ForegroundColor Green
+            Write-Host "  http://YOUR-SERVER-IP:8080" -ForegroundColor Yellow
+        }
+    }
+    
+    Write-Host ""
+    Write-Host "The wizard will guide you through:" -ForegroundColor Cyan
+    Write-Host "  - Selecting your Stack Masters repository" -ForegroundColor White
+    Write-Host "  - Configuring your environment" -ForegroundColor White
+    Write-Host "  - Deploying your services" -ForegroundColor White
+    Write-Host ""
 }
 
 function Main {
