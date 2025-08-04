@@ -1,0 +1,134 @@
+# Claude.md - AI assistant context file
+CLAUDE.md
+
+# Test results and logs
+test-results/
+*.log
+logs/
+*.tmp
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# Windows specific
+*.lnk
+$RECYCLE.BIN/
+
+# Linux/Unix specific
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+.nfs*
+
+# PowerShell specific
+*.ps1.bak
+*.psm1.bak
+*.psd1.bak
+PowerShell_profile.ps1
+Modules/
+Scripts/
+
+# Bash/Shell specific
+*.sh.bak
+*.bash_history
+.bash_sessions/
+
+# Temporary files
+*.swp
+*.swo
+*.swn
+*.tmp
+*.temp
+*.cache
+tmp/
+temp/
+cache/
+
+# Backup files
+*.bak
+*.backup
+*.old
+*.orig
+backup/
+backups/
+
+# Editor directories and files
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
+.project
+.settings/
+
+# Package files
+*.tar
+*.tar.gz
+*.zip
+*.gz
+*.bz2
+*.xz
+*.7z
+*.rar
+
+# Credentials and secrets
+*.pem
+*.key
+*.cert
+*.crt
+*.p12
+*.pfx
+.env
+.env.local
+.env.*.local
+secrets/
+credentials/
+
+# Output and build artifacts
+out/
+output/
+build/
+dist/
+target/
+
+# Documentation build outputs
+docs/_build/
+docs/_site/
+site/
+
+# Node.js (if npm is used for any tooling)
+node_modules/
+npm-debug.log*
+package-lock.json
+yarn.lock
+yarn-error.log*
+
+# Python (if python scripts are used)
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+.Python
+venv/
+env/
+
+# System files
+System Volume Information/
+$WINDOWS.~BT/
+$Windows.~WS/
+pagefile.sys
+hiberfil.sys
+
+# Custom project ignores
+/packages-microsoft-prod.deb
+setup-*.log
+install-*.log
+debug.log
+error.log

@@ -40,9 +40,18 @@ while [[ $# -gt 0 ]]; do
             echo "  --help            Show this help message"
             echo ""
             echo "Examples:"
-            echo "  $0                # Interactive mode (default)"
-            echo "  $0 --server       # Server deployment, no prompts"
-            echo "  $0 --local        # Local development, no prompts"
+            echo "  $0                # Auto-detect based on OS type"
+            echo "  $0 --server       # Force server deployment mode"
+            echo "  $0 --local        # Force local development mode"
+            echo ""
+            echo "Automatic behavior:"
+            echo "  - Server OS: Configures firewall for server deployment"
+            echo "  - Desktop OS: Skips firewall configuration (local development)"
+            echo "  - Use --server or --local flags to override automatic detection"
+            echo ""
+            echo "Repository access requires Skool community membership:"
+            echo "  - AI Stack Masters (Free): https://www.skool.com/ai-stack-masters"
+            echo "  - AI Stack Master Pros (Paid): https://www.skool.com/ai-stack-master-pros"
             exit 0
             ;;
         *)
@@ -83,6 +92,25 @@ check_root() {
         log_error "This script must be run as root"
         log_info "Please run: sudo $0"
         exit 1
+    fi
+}
+
+# Detect OS type (server vs desktop)
+detect_os_type() {
+    # Check if this is a server or desktop environment
+    if [ -f /etc/os-release ]; then
+        . /etc/os-release
+        # Check for desktop indicators
+        if [ -n "${DESKTOP_SESSION:-}" ] || [ -n "${XDG_CURRENT_DESKTOP:-}" ] || [ -n "${DISPLAY:-}" ]; then
+            echo "desktop"
+        elif [[ "$NAME" =~ "Server" ]] || [ -z "${DISPLAY:-}" ]; then
+            echo "server"
+        else
+            # Default to desktop for unknown environments
+            echo "desktop"
+        fi
+    else
+        echo "server"  # Default to server if we can't detect
     fi
 }
 
@@ -131,8 +159,122 @@ detect_os() {
         exit 1
     fi
     
+    # Detect OS type
+    OS_TYPE=$(detect_os_type)
+    
     log_success "Detected: $OS_NAME"
+    log_success "OS Type: $OS_TYPE"
     log_success "Package manager: $PKG_MANAGER"
+}
+
+# Check installed packages
+check_system_packages() {
+    log_info "Checking system packages..."
+    echo ""
+    
+    local installed_packages=()
+    local missing_packages=()
+    
+    # Check Git
+    log_info "Checking Git..."
+    if command -v git &> /dev/null; then
+        GIT_VERSION=$(git --version | awk '{print $3}')
+        installed_packages+=("✓ Git - version $GIT_VERSION")
+        GIT_INSTALLED=true
+    else
+        missing_packages+=("✗ Git - Version control system")
+        GIT_INSTALLED=false
+    fi
+    
+    # Check GitHub CLI
+    log_info "Checking GitHub CLI..."
+    if command -v gh &> /dev/null; then
+        GH_VERSION=$(gh --version | head -n1 | awk '{print $3}')
+        installed_packages+=("✓ GitHub CLI - version $GH_VERSION")
+        GH_INSTALLED=true
+    else
+        missing_packages+=("✗ GitHub CLI - Required for repository authentication")
+        GH_INSTALLED=false
+    fi
+    
+    # Check Docker
+    log_info "Checking Docker..."
+    if command -v docker &> /dev/null; then
+        DOCKER_VERSION=$(docker --version | awk '{print $3}' | sed 's/,$//')
+        installed_packages+=("✓ Docker - version $DOCKER_VERSION")
+        DOCKER_INSTALLED=true
+    else
+        missing_packages+=("✗ Docker - Container runtime")
+        DOCKER_INSTALLED=false
+    fi
+    
+    # Display results
+    echo ""
+    echo -e "${BLUE}System Package Status:${NC}"
+    echo -e "${BLUE}=====================${NC}"
+    
+    if [ ${#installed_packages[@]} -gt 0 ]; then
+        echo ""
+        echo -e "${GREEN}Installed packages:${NC}"
+        for package in "${installed_packages[@]}"; do
+            echo -e "  ${GREEN}$package${NC}"
+        done
+    fi
+    
+    if [ ${#missing_packages[@]} -gt 0 ]; then
+        echo ""
+        echo -e "${YELLOW}Missing packages:${NC}"
+        for package in "${missing_packages[@]}"; do
+            echo -e "  ${YELLOW}$package${NC}"
+        done
+    fi
+    
+    echo ""
+}
+
+# Confirm installation
+confirm_installation() {
+    local needs_installation=false
+    local install_list=()
+    
+    if [ "$GIT_INSTALLED" = false ]; then
+        needs_installation=true
+        install_list+=("- Git")
+    fi
+    
+    if [ "$GH_INSTALLED" = false ]; then
+        needs_installation=true
+        install_list+=("- GitHub CLI")
+    fi
+    
+    if [ "$DOCKER_INSTALLED" = false ]; then
+        needs_installation=true
+        install_list+=("- Docker")
+    fi
+    
+    if [ "$needs_installation" = false ]; then
+        log_success "All required packages are already installed!"
+        return 0
+    fi
+    
+    echo ""
+    echo -e "${YELLOW}The following packages will be installed:${NC}"
+    for item in "${install_list[@]}"; do
+        echo -e "  ${YELLOW}$item${NC}"
+    done
+    
+    echo ""
+    echo -ne "${BLUE}Do you want to proceed with the installation? (Y/N) ${NC}"
+    read -r response
+    
+    if [[ "$response" =~ ^[Yy](es)?$ ]]; then
+        echo ""
+        log_info "Proceeding with installation..."
+        return 0
+    else
+        log_warning "Installation cancelled by user"
+        return 1
+    fi
 }
 
 # Update system packages
@@ -270,35 +412,34 @@ configure_firewall() {
         return
     fi
     
-    # Use command line argument if provided, otherwise prompt
-    if [ -z "$DEPLOYMENT_MODE" ]; then
-        log_info "Deployment Mode Selection"
-        echo ""
-        echo "Please select your deployment type:"
-        echo "1) Server deployment (VPS/Cloud) - Configure firewall with required ports"
-        echo "2) Local development (Mac/Windows/Linux) - Skip firewall configuration"
-        echo ""
-        read -p "Select mode [1-2] (default: 1): " DEPLOYMENT_MODE
-        
-        # Default to server mode if no input
-        DEPLOYMENT_MODE=${DEPLOYMENT_MODE:-1}
+    # Check if user explicitly specified a mode
+    local force_server_mode=false
+    local force_local_mode=false
+    
+    if [ "$DEPLOYMENT_MODE" = "1" ]; then
+        force_server_mode=true
+    elif [ "$DEPLOYMENT_MODE" = "2" ]; then
+        force_local_mode=true
     fi
     
-    case $DEPLOYMENT_MODE in
-        1)
-            log_info "Server deployment mode selected - configuring firewall..."
-            configure_server_firewall
-            ;;
-        2)
-            log_info "Local development mode selected - skipping firewall configuration"
-            log_info "Assuming local firewall/router handles port access"
-            return
-            ;;
-        *)
-            log_error "Invalid selection. Defaulting to server deployment mode."
-            configure_server_firewall
-            ;;
-    esac
+    # Determine action based on OS type and user parameters
+    if [ "$OS_TYPE" = "server" ] && [ "$force_local_mode" = false ]; then
+        # Server OS - configure firewall unless explicitly set to local mode
+        log_info "Server OS detected - configuring firewall for server deployment..."
+        configure_server_firewall
+    elif [ "$OS_TYPE" = "desktop" ] && [ "$force_server_mode" = false ]; then
+        # Desktop OS - skip firewall unless explicitly set to server mode
+        log_info "Desktop OS detected - skipping firewall configuration for local development"
+        log_info "Firewall configuration is not needed for local development environments"
+    elif [ "$force_server_mode" = true ]; then
+        # User explicitly wants server mode on desktop
+        log_warning "Server mode forced on desktop OS - configuring firewall..."
+        configure_server_firewall
+    elif [ "$force_local_mode" = true ]; then
+        # User explicitly wants local mode on server
+        log_warning "Local mode forced on server OS - skipping firewall configuration"
+        log_info "Firewall configuration skipped by user request"
+    fi
 }
 
 # Configure firewall for server deployment
@@ -406,10 +547,14 @@ clone_repository() {
     log_info "Repository Setup"
     echo ""
     echo "Please provide the GitHub repository URL to clone."
-    echo "Examples:"
-    echo "  - https://github.com/Tech-to-Thrive/stack-masters"
-    echo "  - https://github.com/Tech-to-Thrive/stack-masters-pro"
-    echo "  - https://github.com/Tech-to-Thrive/agent-hosting"
+    echo ""
+    echo -e "${YELLOW}Examples:${NC}"
+    echo -e "  ${BLUE}- https://github.com/AI-Stack-Masters/stack-community${NC}"
+    echo -e "  ${BLUE}- https://github.com/AI-Stack-Master-Pros/stack-pro${NC}"
+    echo ""
+    echo -e "${YELLOW}NOTE: Repository access requires Skool community membership:${NC}"
+    echo -e "  - AI Stack Masters (Free):  ${BLUE}https://www.skool.com/ai-stack-masters${NC}"
+    echo -e "  - AI Stack Master Pros (Paid): ${BLUE}https://www.skool.com/ai-stack-master-pros${NC}"
     echo ""
     
     read -p "Repository URL: " REPO_URL
@@ -434,6 +579,10 @@ clone_repository() {
     else
         log_error "Cannot access repository: $REPO_PATH"
         log_info "Please ensure you have access to this repository"
+        echo ""
+        log_warning "Repository access requires Skool community membership:"
+        echo -e "  ${YELLOW}- AI Stack Masters (Free): ${BLUE}https://www.skool.com/ai-stack-masters${NC}"
+        echo -e "  ${YELLOW}- AI Stack Master Pros (Paid): ${BLUE}https://www.skool.com/ai-stack-master-pros${NC}"
         exit 1
     fi
     
@@ -488,26 +637,62 @@ validate_system() {
 # Main installation flow
 main() {
     clear
-    echo "=============================================="
-    echo "   Stack Masters Setup Script v${VERSION}"
-    echo "   Universal VPS/Server Provisioning"
-    echo "=============================================="
-    echo ""
-    log_info "Compatible with: Hostinger, DigitalOcean, Vultr, AWS, Linode, etc."
-    echo ""
     
     # Pre-flight checks
     check_root
     detect_os
     
+    echo -e "${BLUE}==============================================${NC}"
+    echo -e "${BLUE}   Stack Masters Setup Script v${VERSION}${NC}"
+    echo -e "${BLUE}   $OS_NAME${NC}"
+    echo -e "${BLUE}==============================================${NC}"
+    echo ""
+    log_info "Starting Stack Masters setup..."
+    log_info "Detected OS: $OS_NAME"
+    log_info "OS Type: $OS_TYPE"
+    echo ""
+    
+    # Display what this script will do
+    echo -e "${YELLOW}This script will:${NC}"
+    echo -e "${YELLOW}  1. Check your system for required packages${NC}"
+    echo -e "${YELLOW}  2. Install missing packages (with your permission)${NC}"
+    if [ "$OS_TYPE" = "server" ]; then
+        echo -e "${YELLOW}  3. Configure firewall (Server OS detected)${NC}"
+    else
+        echo -e "${YELLOW}  3. Skip firewall configuration (Desktop OS detected)${NC}"
+    fi
+    echo -e "${YELLOW}  4. Authenticate with GitHub${NC}"
+    echo -e "${YELLOW}  5. Clone the Stack Masters repository${NC}"
+    echo ""
+    echo -e "${BLUE}Press any key to continue...${NC}"
+    read -n 1 -s
+    echo ""
+    
+    # Check system packages
+    check_system_packages
+    
+    # Confirm installation with user
+    if ! confirm_installation; then
+        log_info "Setup cancelled"
+        exit 0
+    fi
+    
     # System preparation
     update_system
     install_core_deps
     
-    # Install components
-    install_git
-    install_github_cli
-    install_docker
+    # Install missing components
+    if [ "$GIT_INSTALLED" = false ]; then
+        install_git
+    fi
+    
+    if [ "$GH_INSTALLED" = false ]; then
+        install_github_cli
+    fi
+    
+    if [ "$DOCKER_INSTALLED" = false ]; then
+        install_docker
+    fi
     
     # Configure system
     configure_firewall

@@ -1,15 +1,37 @@
 # Stack Masters Windows Server Setup Script
 # PowerShell script for preparing Windows Server for containerized Stack Masters deployment
 
+[CmdletBinding()]
 param(
+    [Parameter()]
     [string]$RepoUrl = "",
+    
+    [Parameter()]
     [switch]$SkipFirewall = $false,
+    
+    [Parameter()]
     [switch]$SkipAuth = $false,
+    
+    [Parameter()]
     [switch]$Server = $false,
+    
+    [Parameter()]
     [switch]$Local = $false,
+    
+    [Parameter()]
     [switch]$Development = $false,
-    [switch]$Help = $false
+    
+    [Parameter()]
+    [switch]$Help = $false,
+    
+    [Parameter()]
+    [ValidateSet('server', 'local', 'Server', 'Local', 'SERVER', 'LOCAL', IgnoreCase = $true)]
+    [string]$Mode = ""
 )
+
+# Set strict mode and error action preference
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
 
 # Script version
 $VERSION = "1.0.0"
@@ -18,56 +40,76 @@ $VERSION = "1.0.0"
 function Write-Info { 
     param([string]$Message)
     Write-Host "[INFO] $Message" -ForegroundColor Cyan
-    Add-Content -Path $LogFile -Value "[$(Get-Date)] INFO: $Message"
+    Add-Content -Path $script:LogFile -Value "[$(Get-Date)] INFO: $Message"
 }
 
 function Write-Success { 
     param([string]$Message)
     Write-Host "[SUCCESS] $Message" -ForegroundColor Green
-    Add-Content -Path $LogFile -Value "[$(Get-Date)] SUCCESS: $Message"
+    Add-Content -Path $script:LogFile -Value "[$(Get-Date)] SUCCESS: $Message"
 }
 
 function Write-Warning { 
     param([string]$Message)
     Write-Host "[WARNING] $Message" -ForegroundColor Yellow
-    Add-Content -Path $LogFile -Value "[$(Get-Date)] WARNING: $Message"
+    Add-Content -Path $script:LogFile -Value "[$(Get-Date)] WARNING: $Message"
 }
 
-function Write-Error-Custom { 
+function Write-ErrorCustom { 
     param([string]$Message)
     Write-Host "[ERROR] $Message" -ForegroundColor Red
-    Add-Content -Path $LogFile -Value "[$(Get-Date)] ERROR: $Message"
+    Add-Content -Path $script:LogFile -Value "[$(Get-Date)] ERROR: $Message"
 }
 
 # Initialize logging
-$LogFile = "C:\temp\stack-masters-setup.log"
-New-Item -ItemType Directory -Force -Path "C:\temp" | Out-Null
+$script:LogFile = "C:\temp\stack-masters-setup.log"
+$null = New-Item -ItemType Directory -Force -Path "C:\temp"
 
 function Show-Help {
-    Write-Host @"
-Stack Masters Windows Server Setup Script v$VERSION
+    $helpText = @"
+Stack Masters Windows Setup Script v$VERSION
 
 USAGE:
     .\setup-windows.ps1 [OPTIONS]
 
 OPTIONS:
-    -RepoUrl <string>     GitHub repository URL to clone
+    -Mode <string>       Deployment mode: 'server' or 'local' (case-insensitive)
+    -Server              Server deployment mode (configures firewall)
+    -Local               Local development mode (skips firewall)
+    -Development         Alias for -Local
+    -RepoUrl <string>    GitHub repository URL to clone
     -SkipFirewall        Skip Windows Firewall configuration
     -SkipAuth            Skip GitHub authentication (for testing)
     -Help                Show this help message
 
 EXAMPLES:
-    .\setup-windows.ps1
-    .\setup-windows.ps1 -RepoUrl "https://github.com/Tech-to-Thrive/stack-masters"
-    .\setup-windows.ps1 -SkipFirewall -SkipAuth
+    .\setup-windows.ps1 -Mode server    # Force server mode
+    .\setup-windows.ps1 -Local          # Force local mode
+    .\setup-windows.ps1                 # Auto-detect based on OS type
+    .\setup-windows.ps1 -RepoUrl "https://github.com/AI-Stack-Masters/stack-community"
+    .\setup-windows.ps1 -RepoUrl "https://github.com/AI-Stack-Master-Pros/stack-pro"
+
+AUTOMATIC BEHAVIOR:
+    - Windows Server: Configures firewall for server deployment
+    - Windows 10/11: Skips firewall configuration (local development)
+    - Use -Server or -Local flags to override automatic detection
 
 This script will install:
-- Git for Windows
-- Docker Desktop
-- GitHub CLI
-- Configure Windows Firewall
+- Git for Windows (via winget)
+- Docker Desktop (via winget)
+- GitHub CLI (via winget)
+- Configure Windows Firewall (server mode only)
 - Clone the specified repository
+
+Requirements:
+- Windows 10 1809+, Windows 11, or Windows Server 2019+
+- Windows Package Manager (winget)
+- Administrator privileges
+- Skool community membership for repository access:
+  * AI Stack Masters (Free): https://www.skool.com/ai-stack-masters
+  * AI Stack Master Pros (Paid): https://www.skool.com/ai-stack-master-pros
 "@
+    Write-Host $helpText
 }
 
 function Test-Administrator {
@@ -76,44 +118,217 @@ function Test-Administrator {
     return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
-function Install-Chocolatey {
-    Write-Info "Installing Chocolatey package manager..."
+function Get-WindowsType {
+    # Get OS information
+    $os = Get-CimInstance -ClassName Win32_OperatingSystem
+    $computerInfo = Get-CimInstance -ClassName Win32_ComputerSystem
     
-    if (Get-Command choco -ErrorAction SilentlyContinue) {
-        Write-Info "Chocolatey already installed"
-        return
+    # ProductType: 1 = Workstation, 2 = Domain Controller, 3 = Server
+    if ($os.ProductType -eq 1) {
+        # Desktop OS (Windows 10/11)
+        return @{
+            Type = "Desktop"
+            Name = $os.Caption
+            Version = $os.Version
+            IsServer = $false
+        }
     }
-    
-    Set-ExecutionPolicy Bypass -Scope Process -Force
-    [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
-    
-    try {
-        Invoke-Expression ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
-        Write-Success "Chocolatey installed successfully"
-    }
-    catch {
-        Write-Error-Custom "Failed to install Chocolatey: $($_.Exception.Message)"
-        exit 1
+    else {
+        # Server OS
+        return @{
+            Type = "Server"
+            Name = $os.Caption
+            Version = $os.Version
+            IsServer = $true
+        }
     }
 }
+
+function Update-Path {
+    # Refresh PATH environment variable to include newly installed programs
+    $machinePath = [System.Environment]::GetEnvironmentVariable("PATH", "Machine")
+    $userPath = [System.Environment]::GetEnvironmentVariable("PATH", "User")
+    $env:PATH = "$machinePath;$userPath"
+    
+    # Also refresh from registry for immediate effect
+    $registryPath = 'Registry::HKEY_LOCAL_MACHINE\System\CurrentControlSet\Control\Session Manager\Environment'
+    $envPath = (Get-ItemProperty -Path $registryPath -Name PATH).Path
+    $env:PATH = "$envPath;$userPath"
+}
+
+function Check-SystemPackages {
+    Write-Info "Checking system packages..."
+    Write-Host ""
+    
+    $packageStatus = @{
+        Git = $false
+        GitHubCLI = $false
+        Docker = $false
+        Winget = $false
+    }
+    
+    $installedPackages = @()
+    $missingPackages = @()
+    
+    # Check Winget
+    Write-Info "Checking Windows Package Manager (winget)..."
+    try {
+        $wingetVersion = & winget --version 2>&1
+        if ($?) {
+            $packageStatus.Winget = $true
+            $installedPackages += "✓ Windows Package Manager (winget) - $wingetVersion"
+        }
+    }
+    catch {
+        $missingPackages += "✗ Windows Package Manager (winget) - Required for installations"
+    }
+    
+    # Check Git
+    Write-Info "Checking Git..."
+    if (Get-Command git -ErrorAction SilentlyContinue) {
+        $gitVersion = & git --version 2>&1
+        $packageStatus.Git = $true
+        $installedPackages += "✓ Git - $gitVersion"
+    }
+    else {
+        $missingPackages += "✗ Git - Version control system"
+    }
+    
+    # Check GitHub CLI
+    Write-Info "Checking GitHub CLI..."
+    if (Get-Command gh -ErrorAction SilentlyContinue) {
+        $ghVersion = & gh --version 2>&1 | Select-Object -First 1
+        $packageStatus.GitHubCLI = $true
+        $installedPackages += "✓ GitHub CLI - $ghVersion"
+    }
+    else {
+        $missingPackages += "✗ GitHub CLI - Required for repository authentication"
+    }
+    
+    # Check Docker
+    Write-Info "Checking Docker..."
+    if (Get-Command docker -ErrorAction SilentlyContinue) {
+        $dockerVersion = & docker --version 2>&1
+        $packageStatus.Docker = $true
+        $installedPackages += "✓ Docker - $dockerVersion"
+    }
+    else {
+        $missingPackages += "✗ Docker Desktop - Container runtime"
+    }
+    
+    # Display results
+    Write-Host ""
+    Write-Host "System Package Status:" -ForegroundColor Cyan
+    Write-Host "=====================" -ForegroundColor Cyan
+    
+    if ($installedPackages.Count -gt 0) {
+        Write-Host ""
+        Write-Host "Installed packages:" -ForegroundColor Green
+        foreach ($package in $installedPackages) {
+            Write-Host "  $package" -ForegroundColor Green
+        }
+    }
+    
+    if ($missingPackages.Count -gt 0) {
+        Write-Host ""
+        Write-Host "Missing packages:" -ForegroundColor Yellow
+        foreach ($package in $missingPackages) {
+            Write-Host "  $package" -ForegroundColor Yellow
+        }
+    }
+    
+    Write-Host ""
+    return $packageStatus
+}
+
+function Confirm-Installation {
+    param(
+        [hashtable]$PackageStatus
+    )
+    
+    $needsInstallation = $false
+    $installList = @()
+    
+    if (-not $PackageStatus.Winget) {
+        Write-ErrorCustom "Windows Package Manager (winget) is required but not available"
+        Write-Info "Please ensure you have:"
+        Write-Info "- Windows 10 version 1809 or later"
+        Write-Info "- Windows Server 2019 or later"
+        Write-Info "- Or install App Installer from Microsoft Store"
+        throw "Cannot proceed without winget"
+    }
+    
+    if (-not $PackageStatus.Git) {
+        $needsInstallation = $true
+        $installList += "- Git for Windows"
+    }
+    
+    if (-not $PackageStatus.GitHubCLI) {
+        $needsInstallation = $true
+        $installList += "- GitHub CLI"
+    }
+    
+    if (-not $PackageStatus.Docker) {
+        $needsInstallation = $true
+        $installList += "- Docker Desktop"
+    }
+    
+    if (-not $needsInstallation) {
+        Write-Success "All required packages are already installed!"
+        return $true
+    }
+    
+    Write-Host ""
+    Write-Host "The following packages will be installed:" -ForegroundColor Yellow
+    foreach ($item in $installList) {
+        Write-Host "  $item" -ForegroundColor Yellow
+    }
+    
+    Write-Host ""
+    Write-Host "Do you want to proceed with the installation? (Y/N) " -ForegroundColor Cyan -NoNewline
+    $response = Read-Host
+    
+    if ($response -match '^[Yy](es)?$') {
+        Write-Host ""
+        Write-Info "Proceeding with installation..."
+        return $true
+    }
+    else {
+        Write-Warning "Installation cancelled by user"
+        return $false
+    }
+}
+
 
 function Install-Git {
     Write-Info "Installing Git for Windows..."
     
     if (Get-Command git -ErrorAction SilentlyContinue) {
-        $gitVersion = git --version
+        $gitVersion = & git --version
         Write-Info "Git already installed: $gitVersion"
         return
     }
     
     try {
-        choco install git -y --params "/GitAndUnixToolsOnPath /NoShellIntegration"
-        $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("PATH","User")
-        Write-Success "Git installed successfully"
+        Write-Info "Installing Git via winget..."
+        $result = & winget install --id Git.Git --exact --silent --accept-package-agreements --accept-source-agreements
+        if ($LASTEXITCODE -ne 0) {
+            throw "Winget install failed with exit code: $LASTEXITCODE"
+        }
+        
+        # Refresh PATH
+        Update-Path
+        
+        # Verify installation
+        if (Get-Command git -ErrorAction SilentlyContinue) {
+            Write-Success "Git installed successfully"
+        } else {
+            throw "Git installation completed but git command not found in PATH"
+        }
     }
     catch {
-        Write-Error-Custom "Failed to install Git: $($_.Exception.Message)"
-        exit 1
+        Write-ErrorCustom "Failed to install Git: $($_.Exception.Message)"
+        throw "Failed to install Git: $($_.Exception.Message)"
     }
 }
 
@@ -121,19 +336,31 @@ function Install-GitHubCLI {
     Write-Info "Installing GitHub CLI..."
     
     if (Get-Command gh -ErrorAction SilentlyContinue) {
-        $ghVersion = gh --version | Select-Object -First 1
+        $ghVersion = & gh --version | Select-Object -First 1
         Write-Info "GitHub CLI already installed: $ghVersion"
         return
     }
     
     try {
-        choco install gh -y
-        $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("PATH","User")
-        Write-Success "GitHub CLI installed successfully"
+        Write-Info "Installing GitHub CLI via winget..."
+        $result = & winget install --id GitHub.cli --exact --silent --accept-package-agreements --accept-source-agreements
+        if ($LASTEXITCODE -ne 0) {
+            throw "Winget install failed with exit code: $LASTEXITCODE"
+        }
+        
+        # Refresh PATH
+        Update-Path
+        
+        # Verify installation
+        if (Get-Command gh -ErrorAction SilentlyContinue) {
+            Write-Success "GitHub CLI installed successfully"
+        } else {
+            throw "GitHub CLI installation completed but gh command not found in PATH"
+        }
     }
     catch {
-        Write-Error-Custom "Failed to install GitHub CLI: $($_.Exception.Message)"
-        exit 1
+        Write-ErrorCustom "Failed to install GitHub CLI: $($_.Exception.Message)"
+        throw "Failed to install GitHub CLI: $($_.Exception.Message)"
     }
 }
 
@@ -141,91 +368,96 @@ function Install-Docker {
     Write-Info "Installing Docker Desktop..."
     
     if (Get-Command docker -ErrorAction SilentlyContinue) {
-        $dockerVersion = docker --version
+        $dockerVersion = & docker --version
         Write-Info "Docker already installed: $dockerVersion"
         return
     }
     
     try {
         # Enable Hyper-V and Containers features (required for Docker Desktop)
-        Enable-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V -All -NoRestart
-        Enable-WindowsOptionalFeature -Online -FeatureName Containers -All -NoRestart
+        $null = Enable-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V -All -NoRestart
+        $null = Enable-WindowsOptionalFeature -Online -FeatureName Containers -All -NoRestart
         
         # Install Docker Desktop
-        choco install docker-desktop -y
+        Write-Info "Installing Docker Desktop via winget..."
+        $result = & winget install --id Docker.DockerDesktop --exact --silent --accept-package-agreements --accept-source-agreements
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning "Docker Desktop installation via winget failed. Manual installation may be required."
+            Write-Info "Please download from: https://docs.docker.com/desktop/windows/install/"
+        }
         
         Write-Success "Docker Desktop installed successfully"
         Write-Warning "A system restart may be required for Docker to function properly"
     }
     catch {
-        Write-Error-Custom "Failed to install Docker Desktop: $($_.Exception.Message)"
+        Write-ErrorCustom "Failed to install Docker Desktop: $($_.Exception.Message)"
         Write-Info "Manual installation may be required from https://docs.docker.com/desktop/windows/install/"
     }
 }
 
 function Configure-Firewall {
     if ($SkipFirewall) {
-        Write-Info "Skipping firewall configuration"
+        Write-Info "Skipping firewall configuration (--SkipFirewall specified)"
         return
     }
     
-    # Determine deployment mode from parameters
-    $deploymentMode = ""
-    if ($Server) {
-        $deploymentMode = "1"
-    } elseif ($Local -or $Development) {
-        $deploymentMode = "2"
+    # Get OS type
+    $osInfo = Get-WindowsType
+    
+    # Check if user explicitly specified a mode via parameters
+    $userSpecifiedMode = $false
+    $forceServerMode = $false
+    $forceLocalMode = $false
+    
+    if ($Mode -ieq "server" -or $Server) {
+        $userSpecifiedMode = $true
+        $forceServerMode = $true
+    } elseif ($Mode -ieq "local" -or $Local -or $Development) {
+        $userSpecifiedMode = $true
+        $forceLocalMode = $true
     }
     
-    # If no parameter specified, prompt user
-    if ([string]::IsNullOrEmpty($deploymentMode)) {
-        Write-Host ""
-        Write-Info "Deployment Mode Selection"
-        Write-Host "Please select your deployment type:"
-        Write-Host "1) Server deployment (VPS/Cloud) - Configure firewall with required ports"
-        Write-Host "2) Local development (Mac/Windows/Linux) - Skip firewall configuration"
-        Write-Host ""
-        
-        $deploymentMode = Read-Host "Select mode [1-2] (default: 1)"
-        if ([string]::IsNullOrEmpty($deploymentMode)) {
-            $deploymentMode = "1"
-        }
+    # Determine action based on OS type and user parameters
+    if ($osInfo.IsServer -and !$forceLocalMode) {
+        # Server OS - configure firewall unless explicitly set to local mode
+        Write-Info "Windows Server detected - configuring firewall for server deployment..."
+        Configure-ServerFirewall
     }
-    
-    switch ($deploymentMode) {
-        "1" {
-            Write-Info "Server deployment mode selected - configuring firewall..."
-            Configure-ServerFirewall
-        }
-        "2" {
-            Write-Info "Local development mode selected - skipping firewall configuration"
-            Write-Info "Assuming local firewall/router handles port access"
-            return
-        }
-        default {
-            Write-Warning "Invalid selection. Defaulting to server deployment mode."
-            Configure-ServerFirewall
-        }
+    elseif (!$osInfo.IsServer -and !$forceServerMode) {
+        # Desktop OS - skip firewall unless explicitly set to server mode
+        Write-Info "Windows Desktop detected - skipping firewall configuration for local development"
+        Write-Info "Firewall configuration is not needed for local development environments"
+    }
+    elseif ($forceServerMode) {
+        # User explicitly wants server mode on desktop
+        Write-Warning "Server mode forced on desktop OS - configuring firewall..."
+        Configure-ServerFirewall
+    }
+    elseif ($forceLocalMode) {
+        # User explicitly wants local mode on server
+        Write-Warning "Local mode forced on server OS - skipping firewall configuration"
+        Write-Info "Firewall configuration skipped by user request"
     }
 }
 
 function Configure-ServerFirewall {
     Write-Info "Configuring Windows Firewall for server deployment..."
     
-    $ports = @(80, 443, 8080, 3000, 3001, 3002, 5678, 9090, 9999, 587, 465)
+    [int[]]$ports = @(80, 443, 8080, 3000, 3001, 3002, 5678, 9090, 9999, 587, 465)
     
     foreach ($port in $ports) {
+        $currentPort = $port
         try {
             # Inbound rules
-            New-NetFirewallRule -DisplayName "Stack Masters HTTP $port (Inbound)" -Direction Inbound -Protocol TCP -LocalPort $port -Action Allow -ErrorAction SilentlyContinue
+            New-NetFirewallRule -DisplayName "Stack Masters HTTP $currentPort (Inbound)" -Direction Inbound -Protocol TCP -LocalPort $currentPort -Action Allow -ErrorAction SilentlyContinue
             
             # Outbound rules
-            New-NetFirewallRule -DisplayName "Stack Masters HTTP $port (Outbound)" -Direction Outbound -Protocol TCP -LocalPort $port -Action Allow -ErrorAction SilentlyContinue
+            New-NetFirewallRule -DisplayName "Stack Masters HTTP $currentPort (Outbound)" -Direction Outbound -Protocol TCP -LocalPort $currentPort -Action Allow -ErrorAction SilentlyContinue
             
-            Write-Info "Firewall rule added for port $port"
+            Write-Info "Firewall rule added for port $currentPort"
         }
         catch {
-            Write-Warning "Failed to add firewall rule for port $port: $($_.Exception.Message)"
+            Write-Warning "Failed to add firewall rule for port $($currentPort): $($_.Exception.Message)"
         }
     }
     
@@ -241,8 +473,8 @@ function Authenticate-GitHub {
     Write-Info "Setting up GitHub authentication..."
     
     try {
-        $authStatus = gh auth status 2>&1
-        if ($LASTEXITCODE -eq 0) {
+        $authStatus = & gh auth status 2>&1
+        if ($?) {
             Write-Success "GitHub CLI already authenticated"
             return
         }
@@ -253,8 +485,8 @@ function Authenticate-GitHub {
     
     Write-Info "GitHub authentication required for repository access"
     
-    # Detect server environment (Windows Server or --Server flag)  
-    $isServerEnvironment = ($Server -or (Get-CimInstance Win32_OperatingSystem).ProductType -ne 1)
+    # Detect server environment (Windows Server or --Server flag)
+    $isServerEnvironment = ($Server -or (Get-CimInstance -ClassName Win32_OperatingSystem).ProductType -ne 1)
     
     if ($isServerEnvironment) {
         Write-Info "Server environment detected - using device code authentication"
@@ -272,12 +504,12 @@ function Authenticate-GitHub {
         Write-Host ""
         
         try {
-            gh auth login
+            & gh auth login
             Write-Success "GitHub authentication successful"
         }
         catch {
-            Write-Error-Custom "GitHub authentication failed: $($_.Exception.Message)"
-            exit 1
+            Write-ErrorCustom "GitHub authentication failed: $($_.Exception.Message)"
+            throw "GitHub authentication failed: $($_.Exception.Message)"
         }
     }
     else {
@@ -287,8 +519,8 @@ function Authenticate-GitHub {
         
         try {
             # Try browser auth first with timeout
-            $job = Start-Job -ScriptBlock { gh auth login --web }
-            Wait-Job $job -Timeout 30 | Out-Null
+            $job = Start-Job -ScriptBlock { & gh auth login --web }
+            $null = Wait-Job $job -Timeout 30
             
             if ($job.State -eq "Completed") {
                 Receive-Job $job
@@ -298,13 +530,13 @@ function Authenticate-GitHub {
                 Stop-Job $job
                 Remove-Job $job
                 Write-Info "Browser authentication timed out, using device code flow..."
-                gh auth login
+                & gh auth login
                 Write-Success "GitHub authentication successful"
             }
         }
         catch {
-            Write-Error-Custom "GitHub authentication failed: $($_.Exception.Message)"
-            exit 1
+            Write-ErrorCustom "GitHub authentication failed: $($_.Exception.Message)"
+            throw "GitHub authentication failed: $($_.Exception.Message)"
         }
     }
 }
@@ -317,18 +549,24 @@ function Get-RepositoryUrl {
     Write-Host ""
     Write-Info "Repository Setup"
     Write-Host "Please provide the GitHub repository URL to clone."
-    Write-Host "Examples:"
-    Write-Host "  - https://github.com/Tech-to-Thrive/stack-masters"
-    Write-Host "  - https://github.com/Tech-to-Thrive/stack-masters-pro"
-    Write-Host "  - https://github.com/Tech-to-Thrive/agent-hosting"
+    Write-Host ""
+    Write-Host "Examples:" -ForegroundColor Yellow
+    Write-Host "  - https://github.com/AI-Stack-Masters/stack-community" -ForegroundColor Cyan
+    Write-Host "  - https://github.com/AI-Stack-Master-Pros/stack-pro" -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "NOTE: Repository access requires Skool community membership:" -ForegroundColor Yellow
+    Write-Host "  - AI Stack Masters (Free):  " -NoNewline
+    Write-Host "https://www.skool.com/ai-stack-masters" -ForegroundColor Cyan
+    Write-Host "  - AI Stack Master Pros (Paid): " -NoNewline
+    Write-Host "https://www.skool.com/ai-stack-master-pros" -ForegroundColor Cyan
     Write-Host ""
     
     $url = Read-Host "Repository URL"
     
     if (-not ($url -match "^https://github\.com/[^/]+/[^/]+$")) {
-        Write-Error-Custom "Invalid GitHub repository URL format"
+        Write-ErrorCustom "Invalid GitHub repository URL format"
         Write-Info "Expected format: https://github.com/owner/repository"
-        exit 1
+        throw "Invalid GitHub repository URL format"
     }
     
     return $url
@@ -348,18 +586,24 @@ function Clone-Repository {
     if (-not $SkipAuth) {
         try {
             $repoPath = ($repoUrl -replace 'https://github.com/', '')
-            gh repo view $repoPath | Out-Null
+            $null = & gh repo view $repoPath 2>&1
             Write-Success "Access to repository confirmed!"
         }
         catch {
-            Write-Error-Custom "Cannot access repository: $repoPath"
+            Write-ErrorCustom "Cannot access repository: $repoPath"
             Write-Info "Please ensure you have access to this repository"
-            exit 1
+            Write-Host ""
+            Write-Warning "Repository access requires Skool community membership:"
+            Write-Host "  - AI Stack Masters (Free): " -NoNewline -ForegroundColor Yellow
+            Write-Host "https://www.skool.com/ai-stack-masters" -ForegroundColor Cyan
+            Write-Host "  - AI Stack Master Pros (Paid): " -NoNewline -ForegroundColor Yellow  
+            Write-Host "https://www.skool.com/ai-stack-master-pros" -ForegroundColor Cyan
+            throw "Cannot access repository: $repoPath"
         }
     }
     
     # Create parent directory
-    New-Item -ItemType Directory -Force -Path "C:\StackMasters" | Out-Null
+    $null = New-Item -ItemType Directory -Force -Path "C:\StackMasters"
     
     # Remove existing directory if present
     if (Test-Path $cloneDir) {
@@ -371,7 +615,7 @@ function Clone-Repository {
     # Clone the repository
     Write-Info "Cloning repository: $repoUrl"
     try {
-        gh repo clone $repoUrl $cloneDir
+        & gh repo clone $repoUrl $cloneDir
         Write-Success "Repository cloned to: $cloneDir"
         
         # Set environment variable for next steps
@@ -380,37 +624,37 @@ function Clone-Repository {
         return $cloneDir
     }
     catch {
-        Write-Error-Custom "Failed to clone repository: $($_.Exception.Message)"
-        exit 1
+        Write-ErrorCustom "Failed to clone repository: $($_.Exception.Message)"
+        throw "Failed to clone repository: $($_.Exception.Message)"
     }
 }
 
 function Test-Installation {
     Write-Info "Validating installation..."
     
-    $errors = @()
+    $errors = New-Object System.Collections.ArrayList
     
     # Test Git
     try {
-        $gitVersion = git --version
+        $gitVersion = & git --version
         Write-Success "Git is working: $gitVersion"
     }
     catch {
-        $errors += "Git test failed"
+        $null = $errors.Add("Git test failed")
     }
     
     # Test GitHub CLI
     try {
-        $ghVersion = gh --version | Select-Object -First 1
+        $ghVersion = & gh --version | Select-Object -First 1
         Write-Success "GitHub CLI is working: $ghVersion"
     }
     catch {
-        $errors += "GitHub CLI test failed"
+        $null = $errors.Add("GitHub CLI test failed")
     }
     
     # Test Docker (may not work until restart)
     try {
-        $dockerVersion = docker --version
+        $dockerVersion = & docker --version
         Write-Success "Docker is working: $dockerVersion"
     }
     catch {
@@ -418,7 +662,7 @@ function Test-Installation {
     }
     
     # Check disk space
-    $freeSpace = (Get-WmiObject -Class Win32_LogicalDisk -Filter "DeviceID='C:'").FreeSpace / 1GB
+    $freeSpace = (Get-CimInstance -ClassName Win32_LogicalDisk -Filter "DeviceID='C:'").FreeSpace / 1GB
     if ($freeSpace -lt 20) {
         Write-Warning "Low disk space: $($freeSpace.ToString('N1'))GB available (recommended: 20GB+)"
     }
@@ -427,7 +671,7 @@ function Test-Installation {
     }
     
     # Check memory
-    $totalMemory = (Get-WmiObject -Class Win32_ComputerSystem).TotalPhysicalMemory / 1GB
+    $totalMemory = (Get-CimInstance -ClassName Win32_ComputerSystem).TotalPhysicalMemory / 1GB
     if ($totalMemory -lt 4) {
         Write-Warning "Low memory: $($totalMemory.ToString('N1'))GB available (recommended: 4GB+)"
     }
@@ -439,46 +683,85 @@ function Test-Installation {
         Write-Success "All validation tests passed"
     }
     else {
-        Write-Error-Custom "Validation errors: $($errors -join ', ')"
+        Write-ErrorCustom "Validation errors: $($errors -join ', ')"
     }
 }
 
 function Main {
     Clear-Host
-    Write-Host "================================================"
-    Write-Host "   Stack Masters Windows Setup Script v$VERSION"
-    Write-Host "   Windows Server Preparation"
-    Write-Host "================================================"
+    
+    # Detect OS type
+    $osInfo = Get-WindowsType
+    
+    Write-Host "================================================" -ForegroundColor Cyan
+    Write-Host "   Stack Masters Windows Setup Script v$VERSION" -ForegroundColor Cyan
+    Write-Host "   $($osInfo.Name)" -ForegroundColor Cyan
+    Write-Host "================================================" -ForegroundColor Cyan
     Write-Host ""
     
     if ($Help) {
         Show-Help
-        return
+        exit 0
     }
     
     # Check if running as administrator
     if (-not (Test-Administrator)) {
-        Write-Error-Custom "This script must be run as Administrator"
+        Write-ErrorCustom "This script must be run as Administrator"
         Write-Info "Please run PowerShell as Administrator and try again"
-        exit 1
+        throw "This script must be run as Administrator"
     }
     
-    Write-Info "Starting Stack Masters setup for Windows Server..."
-    Write-Info "Log file: $LogFile"
+    Write-Info "Starting Stack Masters setup..."
+    Write-Info "Detected OS: $($osInfo.Name)"
+    Write-Info "OS Type: $($osInfo.Type)"
+    Write-Info "Log file: $script:LogFile"
     Write-Host ""
     
-    # Install components
-    Install-Chocolatey
-    Install-Git
-    Install-GitHubCLI
-    Install-Docker
+    # Display what this script will do
+    Write-Host "This script will:" -ForegroundColor Yellow
+    Write-Host "  1. Check your system for required packages" -ForegroundColor Yellow
+    Write-Host "  2. Install missing packages (with your permission)" -ForegroundColor Yellow
+    if ($osInfo.IsServer) {
+        Write-Host "  3. Configure Windows Firewall (Server OS detected)" -ForegroundColor Yellow
+    } else {
+        Write-Host "  3. Skip firewall configuration (Desktop OS detected)" -ForegroundColor Yellow
+    }
+    Write-Host "  4. Authenticate with GitHub" -ForegroundColor Yellow
+    Write-Host "  5. Clone the Stack Masters repository" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "Press any key to continue..." -ForegroundColor Cyan
+    $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+    Write-Host ""
+    
+    # Check system packages
+    $packageStatus = Check-SystemPackages
+    
+    # Confirm installation with user
+    $proceedWithInstall = Confirm-Installation -PackageStatus $packageStatus
+    if (-not $proceedWithInstall) {
+        Write-Info "Setup cancelled"
+        exit 0
+    }
+    
+    # Install missing components
+    if (-not $packageStatus.Git) {
+        Install-Git
+    }
+    
+    if (-not $packageStatus.GitHubCLI) {
+        Install-GitHubCLI
+    }
+    
+    if (-not $packageStatus.Docker) {
+        Install-Docker
+    }
     
     # Configure system
     Configure-Firewall
     
     # GitHub authentication and repository setup
     Authenticate-GitHub
-    $cloneDir = Clone-Repository
+    [string]$cloneDir = Clone-Repository
     
     # Validate installation
     Test-Installation
@@ -495,8 +778,14 @@ function Main {
     Write-Host "  3. Run setup scripts (if available)"
     Write-Host "  4. Configure Docker settings if needed"
     Write-Host ""
-    Write-Info "Log file saved to: $LogFile"
+    Write-Info "Log file saved to: $script:LogFile"
 }
 
-# Run main function
-Main
+# Run main function with error handling
+try {
+    Main
+}
+catch {
+    Write-ErrorCustom "Script failed: $($_.Exception.Message)"
+    exit 1
+}

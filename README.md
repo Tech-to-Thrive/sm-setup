@@ -51,10 +51,10 @@ For complete documentation, guides, and examples, see the **[docs/](docs/)** dir
 Hostinger, DigitalOcean, Vultr, AWS EC2, Google Cloud, Linode, Hetzner, OVHcloud
 
 ### Operating Systems  
-Ubuntu, Debian, CentOS, Rocky Linux, AlmaLinux, openSUSE, Arch Linux, Windows Server 2022/2025
+Ubuntu, Debian, CentOS, Rocky Linux, AlmaLinux, openSUSE, Arch Linux, Windows Server 2022/2025, Windows 10/11
 
 ### Package Managers
-apt, yum/dnf, pacman, zypper, chocolatey
+apt, yum/dnf, pacman, zypper, winget (Windows Package Manager)
 
 ## 🛠️ What Gets Installed
 
