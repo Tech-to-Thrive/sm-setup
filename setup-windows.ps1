@@ -245,8 +245,8 @@ function Stop-ExistingWizard {
     
     # Method 3: Kill ALL node processes that might be ours
     Write-Info "Checking for Node.js processes..."
-    $nodeProcesses = Get-Process -Name "node" -ErrorAction SilentlyContinue
-    if ($nodeProcesses) {
+    $nodeProcesses = @(Get-Process -Name "node" -ErrorAction SilentlyContinue)
+    if ($nodeProcesses.Count -gt 0) {
         Write-Warning "Found $($nodeProcesses.Count) Node.js process(es). Checking which are wizard processes..."
         
         $wizardDir = Join-Path $scriptDir "run\provisioning-wizard"
