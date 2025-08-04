@@ -915,6 +915,63 @@ function Setup-ProvisioningWizard {
     return $wizardDir
 }
 
+function Test-WizardDiagnostics {
+    Write-Info "Running wizard pre-flight diagnostics..."
+    $diagnosticErrors = 0
+    
+    # Check Node.js installation
+    Write-Info "Checking Node.js installation..."
+    if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+        Write-ErrorCustom "Node.js is not installed or not in PATH"
+        Write-Info "Please install Node.js from https://nodejs.org/"
+        $diagnosticErrors++
+    }
+    else {
+        $nodeVersion = & node --version 2>&1
+        Write-Success "Node.js installed: $nodeVersion"
+    }
+    
+    # Check npm installation
+    if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
+        Write-ErrorCustom "npm is not installed or not in PATH"
+        $diagnosticErrors++
+    }
+    else {
+        $npmVersion = & npm --version 2>&1
+        Write-Success "npm installed: $npmVersion"
+    }
+    
+    # Check if port 8080 is available (more thorough check)
+    Write-Info "Checking port 8080 availability..."
+    $tcpConnections = Get-NetTCPConnection -LocalPort 8080 -ErrorAction SilentlyContinue
+    if ($tcpConnections) {
+        Write-ErrorCustom "Port 8080 is already in use!"
+        
+        # Try to identify the process
+        foreach ($conn in $tcpConnections) {
+            try {
+                $process = Get-Process -Id $conn.OwningProcess -ErrorAction SilentlyContinue
+                Write-ErrorCustom "  Process using port: $($process.Name) (PID: $($process.Id))"
+            }
+            catch {
+                Write-ErrorCustom "  Process using port: PID $($conn.OwningProcess)"
+            }
+        }
+        
+        Write-Info "Please stop the process using port 8080 or choose a different port"
+        $diagnosticErrors++
+    }
+    else {
+        Write-Success "Port 8080 is available"
+    }
+    
+    # Return object with diagnostic results
+    return @{
+        HasCriticalIssues = ($diagnosticErrors -gt 0)
+        ErrorCount = $diagnosticErrors
+    }
+}
+
 function Start-ProvisioningWizard {
     param(
         [Parameter(Mandatory = $true)]
@@ -929,107 +986,329 @@ function Start-ProvisioningWizard {
         throw "Backend directory not found"
     }
     
-    # Install dependencies
-    Write-Info "Installing dependencies..."
     Push-Location $backendDir
     try {
-        $npmOutput = & npm install --production 2>&1
-        if ($LASTEXITCODE -ne 0) {
-            Write-ErrorCustom "npm install failed: $npmOutput"
+        # Validate Node.js installation
+        Write-Info "Validating Node.js installation..."
+        if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+            Write-ErrorCustom "Node.js is not installed or not in PATH"
+            throw "Node.js not found"
+        }
+        
+        $nodeVersion = & node --version 2>&1
+        Write-Info "Node.js version: $nodeVersion"
+        
+        # Validate package.json exists
+        $packageJsonPath = Join-Path $backendDir "package.json"
+        if (-not (Test-Path $packageJsonPath)) {
+            Write-ErrorCustom "package.json not found in backend directory"
+            throw "package.json not found"
+        }
+        
+        # Install dependencies with error checking
+        Write-Info "Installing dependencies..."
+        $npmProcess = Start-Process -FilePath "npm" -ArgumentList "install", "--production" -WorkingDirectory $backendDir -Wait -PassThru -NoNewWindow -RedirectStandardOutput "$logsDir\npm-install-output.log" -RedirectStandardError "$logsDir\npm-install-error.log"
+        
+        if ($npmProcess.ExitCode -ne 0) {
+            $npmError = Get-Content "$logsDir\npm-install-error.log" -Raw -ErrorAction SilentlyContinue
+            Write-ErrorCustom "npm install failed with exit code $($npmProcess.ExitCode)"
+            if ($npmError) {
+                Write-ErrorCustom "npm error details: $npmError"
+            }
             throw "npm install failed"
+        }
+        
+        Write-Success "Dependencies installed successfully"
+        
+        # Check if port 8080 is available
+        Write-Info "Checking port availability..."
+        $portInUse = Get-NetTCPConnection -LocalPort 8080 -ErrorAction SilentlyContinue
+        if ($portInUse) {
+            Write-ErrorCustom "Port 8080 is already in use by another process"
+            Write-Info "To find what's using the port: netstat -ano | findstr :8080"
+            throw "Port 8080 is not available"
         }
         
         # Determine host binding
         $osInfo = Get-WindowsType
         $hostBinding = if ($osInfo.IsServer -or $Server -or ($Mode -eq "server")) { "0.0.0.0" } else { "localhost" }
         
+        Write-Info "Starting Node.js server directly..."
+        Write-Info "Host binding: $hostBinding"
+        Write-Info "Working directory: $backendDir"
+        
+        # Start Node.js process directly with proper error handling
+        $processInfo = New-Object System.Diagnostics.ProcessStartInfo
+        $processInfo.FileName = "node"
+        $processInfo.Arguments = "server-integrated.js"
+        $processInfo.WorkingDirectory = $backendDir
+        $processInfo.UseShellExecute = $false
+        $processInfo.CreateNoWindow = $false  # Show window for debugging
+        $processInfo.RedirectStandardOutput = $true
+        $processInfo.RedirectStandardError = $true
+        
         # Set environment variables
-        $env:HOST = $hostBinding
-        $env:PORT = "8080"
-        $env:NODE_ENV = "production"
+        $processInfo.EnvironmentVariables["HOST"] = $hostBinding
+        $processInfo.EnvironmentVariables["PORT"] = "8080"
+        $processInfo.EnvironmentVariables["NODE_ENV"] = "production"
         
-        Write-Info "Starting provisioning wizard on port 8080..."
+        # Start the process
+        $nodeProcess = [System.Diagnostics.Process]::Start($processInfo)
         
-        # Create a batch file to start the wizard
-        $batchContent = @"
-@echo off
-cd /d "$backendDir"
-set HOST=$hostBinding
-set PORT=8080
-set NODE_ENV=production
-echo Starting Stack Masters Provisioning Wizard...
-echo Host: %HOST%
-echo Port: %PORT%
-echo Directory: %CD%
-node server-integrated.js > "$logsDir\wizard-$(Get-Date -Format 'yyyyMMdd-HHmmss').log" 2>&1
-"@
+        if (-not $nodeProcess) {
+            Write-ErrorCustom "Failed to start Node.js process"
+            throw "Failed to start Node.js process"
+        }
         
-        $batchFile = Join-Path $wizardDir "start-wizard.bat"
-        Set-Content -Path $batchFile -Value $batchContent -Encoding ASCII
+        Write-Info "Node.js process started with PID: $($nodeProcess.Id)"
         
-        # Start the batch file in a hidden window
-        $psi = New-Object System.Diagnostics.ProcessStartInfo
-        $psi.FileName = "cmd.exe"
-        $psi.Arguments = "/c start /min `"Stack Masters Wizard`" `"$batchFile`""
-        $psi.UseShellExecute = $true
-        $psi.WindowStyle = "Hidden"
+        # Save PID for cleanup
+        $pidFile = Join-Path $wizardDir "wizard.pid"
+        Set-Content -Path $pidFile -Value $nodeProcess.Id
         
-        $process = [System.Diagnostics.Process]::Start($psi)
+        # Monitor startup for errors (first 10 seconds)
+        Write-Info "Monitoring startup for errors..."
+        $startupTimeout = 10
+        $startupTimer = [System.Diagnostics.Stopwatch]::StartNew()
+        $processStarted = $false
+        $hasErrors = $false
         
-        Write-Info "Provisioning wizard starting..."
-        
-        # Wait for server to be ready with health check
-        Write-Info "Waiting for server to be ready..."
-        $maxAttempts = 16  # 8 seconds total
-        $attempt = 0
-        $serverReady = $false
-        
-        do {
-            Start-Sleep -Milliseconds 500
-            $attempt++
+        while ($startupTimer.Elapsed.TotalSeconds -lt $startupTimeout) {
+            # Check if process is still running
+            if ($nodeProcess.HasExited) {
+                $exitCode = $nodeProcess.ExitCode
+                Write-ErrorCustom "Node.js process exited unexpectedly with code: $exitCode"
+                
+                # Try to read stderr for error details
+                try {
+                    $errorOutput = $nodeProcess.StandardError.ReadToEnd()
+                    if ($errorOutput) {
+                        Write-ErrorCustom "Process error output: $errorOutput"
+                    }
+                } catch {
+                    Write-Warning "Could not read process error output"
+                }
+                
+                $hasErrors = $true
+                break
+            }
+            
+            # Check if server is responding - try multiple endpoints
             try {
-                $response = Invoke-WebRequest -Uri "http://$hostBinding:8080" -TimeoutSec 2 -ErrorAction SilentlyContinue
-                if ($response.StatusCode -eq 200) {
-                    $serverReady = $true
+                # Try health endpoint first
+                $healthResponse = Invoke-WebRequest -Uri "http://$hostBinding:8080/api/health" -TimeoutSec 2 -ErrorAction SilentlyContinue
+                if ($healthResponse.StatusCode -eq 200) {
+                    $processStarted = $true
                     break
                 }
             }
             catch {
-                # Server not ready yet, continue waiting
+                # Health endpoint might require auth, try the root endpoint
+                try {
+                    $rootResponse = Invoke-WebRequest -Uri "http://$hostBinding:8080/" -TimeoutSec 2 -ErrorAction SilentlyContinue
+                    if ($rootResponse.StatusCode -eq 200 -or $rootResponse.StatusCode -eq 401 -or $rootResponse.StatusCode -eq 403) {
+                        # Server is responding (even if it returns auth errors, that means it's running)
+                        $processStarted = $true
+                        break
+                    }
+                }
+                catch {
+                    # Still starting up, continue waiting
+                }
             }
-        } while ($attempt -lt $maxAttempts)
+            
+            Start-Sleep -Milliseconds 500
+        }
         
-        if ($serverReady) {
-            Write-Success "Provisioning wizard is running!"
+        $startupTimer.Stop()
+        
+        # Determine startup result
+        if ($hasErrors) {
+            throw "Node.js process failed to start properly"
+        }
+        elseif ($processStarted) {
+            Write-Success "Provisioning wizard started successfully!"
+            Write-Success "Health check passed: server is responding on port 8080"
             Show-WizardAccessInfo -HostBinding $hostBinding
         }
         else {
-            Write-Warning "Server may still be starting up. Check the process manually."
-            Show-WizardAccessInfo -HostBinding $hostBinding
+            # Process is running but not responding
+            Write-ErrorCustom "Node.js process is running but server is not responding on port 8080"
+            Write-ErrorCustom "This usually indicates a configuration or dependency issue"
+            
+            # Try to get some output from the process
+            try {
+                if (-not $nodeProcess.StandardOutput.EndOfStream) {
+                    $output = $nodeProcess.StandardOutput.ReadToEnd()
+                    if ($output) {
+                        Write-Info "Process output: $output"
+                    }
+                }
+                if (-not $nodeProcess.StandardError.EndOfStream) {
+                    $errorOutput = $nodeProcess.StandardError.ReadToEnd()
+                    if ($errorOutput) {
+                        Write-ErrorCustom "Process errors: $errorOutput"
+                    }
+                }
+            } catch {
+                Write-Warning "Could not read process output"
+            }
+            
+            # Kill the non-responsive process
+            try {
+                $nodeProcess.Kill()
+                Write-Info "Terminated non-responsive process"
+            } catch {
+                Write-Warning "Could not terminate process - it may still be running"
+            }
+            
+            throw "Server failed to start - check logs for details"
         }
         
         # Save wizard info to file for later reference
         $wizardInfoFile = Join-Path $wizardDir "wizard-info.txt"
+        
+        # Build URLs for the info file
+        $localUrl = "http://localhost:8080"
+        $remoteUrls = @()
+        
+        if ($hostBinding -ne "localhost") {
+            try {
+                $networkAdapters = Get-NetIPAddress -AddressFamily IPv4 | Where-Object { 
+                    $_.IPAddress -ne "127.0.0.1" -and 
+                    ($_.PrefixOrigin -eq "Dhcp" -or $_.PrefixOrigin -eq "Manual") 
+                }
+                foreach ($adapter in $networkAdapters) {
+                    $remoteUrls += "  http://$($adapter.IPAddress):8080"
+                }
+            }
+            catch {
+                $remoteUrls += "  http://YOUR-SERVER-IP:8080"
+            }
+        }
+        
         $wizardInfo = @"
 Stack Masters Provisioning Wizard Information
 =============================================
 Started: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
-URL: http://$hostBinding:8080
-Backend Directory: $backendDir
-Host Binding: $hostBinding
+Status: RUNNING
+Process ID: $($nodeProcess.Id)
 
-To check if wizard is running:
-  netstat -an | findstr :8080
+Access URLs:
+  Local:  $localUrl
+$(if ($remoteUrls.Count -gt 0) { "  Remote:`n" + ($remoteUrls -join "`n") })
 
-To stop the wizard:
-  1. Find the process: netstat -ano | findstr :8080
-  2. Kill the process: taskkill /F /PID <process_id>
+System Information:
+  Backend Directory: $backendDir
+  Host Binding: $hostBinding
+  Log Files Directory: $logsDir
+  Node.js Version: $nodeVersion
+
+Management Commands:
+  Check if running:   Get-Process -Id $($nodeProcess.Id) -ErrorAction SilentlyContinue
+  Stop wizard:        Stop-Process -Id $($nodeProcess.Id) -Force
+  Check port status:  netstat -ano | findstr :8080
+  View logs:          Get-Content "$logsDir\stack-masters-setup-*.log" -Tail 50
+
+Troubleshooting:
+  If wizard stops responding:
+    1. Check process: Get-Process -Id $($nodeProcess.Id)
+    2. Check port: netstat -ano | findstr :8080  
+    3. View recent logs in: $logsDir
+    4. Restart manually: cd "$backendDir" && node server-integrated.js
 "@
         Set-Content -Path $wizardInfoFile -Value $wizardInfo
         Write-Info "Wizard information saved to: $wizardInfoFile"
+        
     }
     finally {
         Pop-Location
+    }
+}
+
+function Test-WizardDiagnostics {
+    Write-Info "Running wizard diagnostics..."
+    
+    $issues = @()
+    $warnings = @()
+    
+    # Check Node.js
+    if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+        $issues += "Node.js is not installed or not in PATH"
+    } else {
+        $nodeVersion = & node --version 2>&1
+        if ($nodeVersion -match "v(\d+)\.") {
+            $majorVersion = [int]$matches[1]
+            if ($majorVersion -lt 16) {
+                $warnings += "Node.js version $nodeVersion is below recommended v16+"
+            }
+        }
+    }
+    
+    # Check npm
+    if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
+        $issues += "npm is not installed or not in PATH"
+    }
+    
+    # Check port 8080
+    $portInUse = Get-NetTCPConnection -LocalPort 8080 -ErrorAction SilentlyContinue
+    if ($portInUse) {
+        $processId = $portInUse.OwningProcess
+        $processName = (Get-Process -Id $processId -ErrorAction SilentlyContinue).ProcessName
+        $issues += "Port 8080 is already in use by process: $processName (PID: $processId)"
+    }
+    
+    # Check Windows Firewall (for server environments)
+    $osInfo = Get-WindowsType
+    if ($osInfo.IsServer) {
+        try {
+            $firewallRule = Get-NetFirewallRule -DisplayName "*Stack Masters*8080*" -ErrorAction SilentlyContinue
+            if (-not $firewallRule) {
+                $warnings += "No firewall rule found for port 8080 on server OS"
+            }
+        }
+        catch {
+            $warnings += "Could not check firewall rules"
+        }
+    }
+    
+    # Check available memory
+    $availableMemory = (Get-CimInstance -ClassName Win32_OperatingSystem).FreePhysicalMemory / 1MB
+    if ($availableMemory -lt 1000) {
+        $warnings += "Low available memory: $([math]::Round($availableMemory))MB (recommend 1GB+)"
+    }
+    
+    # Check disk space in temp directory
+    $tempDrive = (Get-Item $env:TEMP).PSDrive.Name
+    $diskSpace = Get-CimInstance -ClassName Win32_LogicalDisk -Filter "DeviceID='${tempDrive}:'"
+    $freeSpaceGB = [math]::Round($diskSpace.FreeSpace / 1GB, 1)
+    if ($freeSpaceGB -lt 2) {
+        $issues += "Low disk space on ${tempDrive}: drive: ${freeSpaceGB}GB (need 2GB+)"
+    }
+    
+    # Report results
+    if ($issues.Count -gt 0) {
+        Write-ErrorCustom "Critical issues found:"
+        foreach ($issue in $issues) {
+            Write-Host "  • $issue" -ForegroundColor Red
+        }
+    }
+    
+    if ($warnings.Count -gt 0) {
+        Write-Warning "Potential issues found:"
+        foreach ($warning in $warnings) {
+            Write-Host "  • $warning" -ForegroundColor Yellow
+        }
+    }
+    
+    if ($issues.Count -eq 0 -and $warnings.Count -eq 0) {
+        Write-Success "No issues detected"
+    }
+    
+    return @{
+        HasCriticalIssues = $issues.Count -gt 0
+        CriticalIssues = $issues
+        Warnings = $warnings
     }
 }
 
@@ -1037,42 +1316,50 @@ function Show-WizardAccessInfo {
     param([string]$HostBinding)
     
     Write-Host ""
-    Write-Host "========================================" -ForegroundColor Cyan
-    Write-Host "Stack Masters Provisioning Wizard" -ForegroundColor Cyan
-    Write-Host "========================================" -ForegroundColor Cyan
+    Write-Host "========================================" -ForegroundColor Green
+    Write-Host "   Stack Masters Provisioning Wizard" -ForegroundColor Green
+    Write-Host "========================================" -ForegroundColor Green
     Write-Host ""
-    Write-Host "Access the wizard at:" -ForegroundColor Green
+    Write-Host "✅ Wizard is running successfully!" -ForegroundColor Green
+    Write-Host ""
+    Write-Host "Access the wizard at:" -ForegroundColor Cyan
     
     if ($HostBinding -eq "localhost") {
-        Write-Host "  http://localhost:8080" -ForegroundColor Yellow
+        Write-Host "  🌐 http://localhost:8080" -ForegroundColor Yellow
     }
     else {
-        Write-Host "  http://localhost:8080" -ForegroundColor Yellow
+        Write-Host "  🌐 http://localhost:8080" -ForegroundColor Yellow
         
         # Show network interfaces for remote access
         try {
-            $networkAdapters = Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.IPAddress -ne "127.0.0.1" -and $_.PrefixOrigin -eq "Dhcp" -or $_.PrefixOrigin -eq "Manual" }
+            $networkAdapters = Get-NetIPAddress -AddressFamily IPv4 | Where-Object { 
+                $_.IPAddress -ne "127.0.0.1" -and 
+                ($_.PrefixOrigin -eq "Dhcp" -or $_.PrefixOrigin -eq "Manual") 
+            }
             if ($networkAdapters) {
                 Write-Host ""
-                Write-Host "From a remote machine:" -ForegroundColor Green
+                Write-Host "Remote access URLs:" -ForegroundColor Cyan
                 foreach ($adapter in $networkAdapters) {
-                    Write-Host "  http://$($adapter.IPAddress):8080" -ForegroundColor Yellow
+                    Write-Host "  🌐 http://$($adapter.IPAddress):8080" -ForegroundColor Yellow
                 }
             }
         }
         catch {
             # Fallback if network detection fails
             Write-Host ""
-            Write-Host "From a remote machine:" -ForegroundColor Green
-            Write-Host "  http://YOUR-SERVER-IP:8080" -ForegroundColor Yellow
+            Write-Host "Remote access:" -ForegroundColor Cyan
+            Write-Host "  🌐 http://YOUR-SERVER-IP:8080" -ForegroundColor Yellow
         }
     }
     
     Write-Host ""
     Write-Host "The wizard will guide you through:" -ForegroundColor Cyan
-    Write-Host "  - Selecting your Stack Masters repository" -ForegroundColor White
-    Write-Host "  - Configuring your environment" -ForegroundColor White
-    Write-Host "  - Deploying your services" -ForegroundColor White
+    Write-Host "  📋 System validation and requirements check" -ForegroundColor White
+    Write-Host "  🔐 GitHub authentication and repository selection" -ForegroundColor White
+    Write-Host "  ⚙️  Environment configuration" -ForegroundColor White
+    Write-Host "  🚀 Service deployment and health monitoring" -ForegroundColor White
+    Write-Host ""
+    Write-Host "💡 Keep this terminal window open while using the wizard" -ForegroundColor Yellow
     Write-Host ""
 }
 
@@ -1155,31 +1442,65 @@ function Main {
         exit 1
     }
     
-    # Setup and start provisioning wizard
-    $wizardDir = Setup-ProvisioningWizard
-    Start-ProvisioningWizard -WizardDir $wizardDir
+    # Run wizard-specific diagnostics
+    Write-Host ""
+    $diagnostics = Test-WizardDiagnostics
+    if ($diagnostics.HasCriticalIssues) {
+        Write-ErrorCustom "Critical issues detected that will prevent the wizard from starting"
+        Write-Info "Please resolve the issues above and try again"
+        exit 1
+    }
     
+    # Setup and start provisioning wizard
     Write-Host ""
-    Write-Host "================================================"
-    Write-Success "Stack Masters initial setup completed!"
-    Write-Host "================================================"
-    Write-Host ""
-    Write-Info "The Stack Masters Provisioning Wizard is now running"
-    Write-Info "Use the web interface to complete your stack deployment"
-    Write-Host ""
-    Write-Info "Next steps:"
-    Write-Host "  1. Open the provisioning wizard in your browser"
-    Write-Host "  2. Select your stack configuration"
-    Write-Host "  3. Follow the guided setup process"
-    Write-Host ""
-    Write-Info "The wizard will handle:"
-    Write-Host "  - GitHub authentication"
-    Write-Host "  - Repository selection and cloning"
-    Write-Host "  - Environment configuration"
-    Write-Host "  - Service deployment"
-    Write-Host "  - SSL certificate setup"
-    Write-Host ""
-    Write-Info "Log file saved to: $script:LogFile"
+    Write-Info "All checks passed - setting up provisioning wizard..."
+    $wizardDir = Setup-ProvisioningWizard
+    
+    try {
+        Start-ProvisioningWizard -WizardDir $wizardDir
+        
+        # Only show success messages if wizard started successfully
+        Write-Host ""
+        Write-Host "================================================"
+        Write-Success "Stack Masters initial setup completed!"
+        Write-Host "================================================"
+        Write-Host ""
+        Write-Info "The Stack Masters Provisioning Wizard is now running"
+        Write-Info "Use the web interface to complete your stack deployment"
+        Write-Host ""
+        Write-Info "Next steps:"
+        Write-Host "  1. Open the provisioning wizard in your browser"
+        Write-Host "  2. Select your stack configuration"
+        Write-Host "  3. Follow the guided setup process"
+        Write-Host ""
+        Write-Info "The wizard will handle:"
+        Write-Host "  - GitHub authentication"
+        Write-Host "  - Repository selection and cloning"
+        Write-Host "  - Environment configuration"
+        Write-Host "  - Service deployment"
+        Write-Host "  - SSL certificate setup"
+        Write-Host ""
+        Write-Info "Log file saved to: $script:LogFile"
+    }
+    catch {
+        Write-Host ""
+        Write-ErrorCustom "❌ FAILED TO START PROVISIONING WIZARD"
+        Write-ErrorCustom "Error: $($_.Exception.Message)"
+        Write-Host ""
+        Write-Info "Troubleshooting steps:"
+        Write-Host "  1. Check the log files in: $script:LogFile" -ForegroundColor White
+        Write-Host "  2. Verify Node.js and npm are working: node --version && npm --version" -ForegroundColor White
+        Write-Host "  3. Check if port 8080 is available: netstat -ano | findstr :8080" -ForegroundColor White
+        Write-Host "  4. Try running the wizard manually:" -ForegroundColor White
+        Write-Host "     cd `"$wizardDir\backend`"" -ForegroundColor Gray
+        Write-Host "     npm install" -ForegroundColor Gray
+        Write-Host "     node server-integrated.js" -ForegroundColor Gray
+        Write-Host ""
+        Write-Info "If issues persist, check the GitHub repository documentation or create an issue"
+        Write-Host ""
+        Write-ErrorCustom "Setup failed - wizard is not running"
+        exit 1
+    }
 }
 
 # Run main function with error handling
