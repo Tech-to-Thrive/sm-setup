@@ -238,7 +238,7 @@ function Stop-ExistingWizard {
     # Method 3: Clean up any node processes in our directories
     $wizardDirs = @(
         "C:\StackMasters\provisioning-wizard",
-        Join-Path $scriptDir "run\provisioning-wizard"
+        (Join-Path $scriptDir "run\provisioning-wizard")
     )
     
     foreach ($dir in $wizardDirs) {
@@ -263,7 +263,7 @@ function Stop-ExistingWizard {
     
     # Method 4: Clean up locked directories
     $lockedDirs = @(
-        Join-Path $scriptDir "run\provisioning-wizard\backend",
+        (Join-Path $scriptDir "run\provisioning-wizard\backend"),
         "C:\StackMasters\provisioning-wizard\backend"
     )
     
