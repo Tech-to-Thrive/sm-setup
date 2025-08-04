@@ -722,7 +722,8 @@ function Test-SystemRequirements {
     # Check memory (minimum 4GB)
     Write-Info "Checking system memory..."
     $totalMemory = (Get-CimInstance -ClassName Win32_ComputerSystem).TotalPhysicalMemory / 1GB
-    $availableMemory = (Get-CimInstance -ClassName Win32_OperatingSystem).FreePhysicalMemory / 1MB / 1024
+    # FreePhysicalMemory is in KB, so convert to GB
+    $availableMemory = (Get-CimInstance -ClassName Win32_OperatingSystem).FreePhysicalMemory / 1024 / 1024
     
     if ($totalMemory -lt 4) {
         Write-ErrorCustom "Insufficient memory: $($totalMemory.ToString('N1'))GB total, 4GB required"
