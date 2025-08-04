@@ -826,10 +826,27 @@ setup_provisioning_wizard() {
     mkdir -p "$RUN_DIR"
     
     WIZARD_DIR="$RUN_DIR/provisioning-wizard"
+    
+    # Don't try to delete existing directory - just update it in place
     if [ -d "$WIZARD_DIR" ]; then
-        rm -rf "$WIZARD_DIR"
+        log_info "Wizard directory already exists. Updating files in place..."
+        
+        # Clean up any PID files from previous runs
+        rm -f "$WIZARD_DIR/wizard.pid" "$WIZARD_DIR/backend/wizard.pid" 2>/dev/null
+        
+        # Clean up node_modules to ensure fresh install
+        if [ -d "$WIZARD_DIR/backend/node_modules" ]; then
+            log_info "Cleaning up old node_modules..."
+            rm -rf "$WIZARD_DIR/backend/node_modules"
+        fi
+        
+        # Clean up package-lock.json to avoid conflicts
+        rm -f "$WIZARD_DIR/backend/package-lock.json" 2>/dev/null
+    else
+        # Create new directory
+        log_info "Creating wizard directory..."
+        mkdir -p "$WIZARD_DIR"
     fi
-    mkdir -p "$WIZARD_DIR"
     
     # Copy provisioning web app
     SOURCE_DIR="$SCRIPT_DIR/apps/provisioning-web"
@@ -838,8 +855,14 @@ setup_provisioning_wizard() {
         exit 1
     fi
     
-    cp -r "$SOURCE_DIR"/* "$WIZARD_DIR/"
-    log_success "Provisioning wizard copied successfully"
+    # Use rsync if available for better handling of existing files
+    if command -v rsync >/dev/null 2>&1; then
+        rsync -av --delete "$SOURCE_DIR/" "$WIZARD_DIR/" >/dev/null 2>&1
+    else
+        cp -r "$SOURCE_DIR"/* "$WIZARD_DIR/"
+    fi
+    
+    log_success "Provisioning wizard files updated successfully"
 }
 
 # Stop any existing wizard processes

@@ -720,86 +720,70 @@ function Setup-ProvisioningWizard {
         throw "Provisioning wizard source not found"
     }
     
+    # Don't try to delete existing directory - just update it in place
     if (Test-Path $targetWizardDir) {
-        Write-Warning "Directory $targetWizardDir already exists. Attempting cleanup..."
+        Write-Info "Wizard directory already exists. Updating files in place..."
         
-        # First, try to stop any processes using this directory
-        $retryCount = 0
-        $maxRetries = 3
-        $cleaned = $false
-        
-        while (-not $cleaned -and $retryCount -lt $maxRetries) {
-            $retryCount++
-            
-            # Check for PID file first
-            $pidFile = Join-Path $targetWizardDir "wizard.pid"
+        # Clean up any PID files from previous runs
+        $pidFiles = @(
+            (Join-Path $targetWizardDir "wizard.pid"),
+            (Join-Path $targetWizardDir "backend\wizard.pid")
+        )
+        foreach ($pidFile in $pidFiles) {
             if (Test-Path $pidFile) {
-                try {
-                    $pid = Get-Content $pidFile -ErrorAction SilentlyContinue
-                    if ($pid) {
-                        $proc = Get-Process -Id $pid -ErrorAction SilentlyContinue
-                        if ($proc) {
-                            Write-Info "Stopping wizard process from PID file (PID: $pid)..."
-                            Stop-Process -Id $pid -Force
-                            Start-Sleep -Seconds 2
-                        }
-                    }
-                    Remove-Item $pidFile -Force -ErrorAction SilentlyContinue
-                }
-                catch {
-                    # Ignore errors
-                }
-            }
-            
-            # Check for any Node.js processes using this directory
-            $nodeProcesses = Get-Process -Name "node" -ErrorAction SilentlyContinue
-            if ($nodeProcesses) {
-                foreach ($proc in $nodeProcesses) {
-                    try {
-                        # Get command line to check if it's our wizard
-                        $commandLine = (Get-CimInstance Win32_Process -Filter "ProcessId = $($proc.Id)").CommandLine
-                        if ($commandLine -and $commandLine -like "*$targetWizardDir*") {
-                            Write-Info "Stopping Node.js process using wizard directory (PID: $($proc.Id))..."
-                            Stop-Process -Id $proc.Id -Force
-                            Start-Sleep -Seconds 2
-                        }
-                    }
-                    catch {
-                        # Ignore errors
-                    }
-                }
-            }
-            
-            # Try to remove the directory
-            try {
-                if (Test-Path $targetWizardDir) {
-                    # First try to rename it (less likely to fail if locked)
-                    $tempName = "$targetWizardDir.old.$(Get-Date -Format 'yyyyMMddHHmmss')"
-                    Move-Item $targetWizardDir $tempName -Force -ErrorAction Stop
-                    Remove-Item $tempName -Recurse -Force -ErrorAction SilentlyContinue
-                }
-                $cleaned = $true
-                Write-Success "Cleaned up existing wizard directory"
-            }
-            catch {
-                if ($retryCount -lt $maxRetries) {
-                    Write-Warning "Directory still locked. Waiting before retry $retryCount/$maxRetries..."
-                    Start-Sleep -Seconds 3
-                }
-                else {
-                    Write-ErrorCustom "Cannot remove wizard directory after $maxRetries attempts: $($_.Exception.Message)"
-                    Write-Info "Please ensure no processes are using the directory and try again"
-                    throw "Cannot setup wizard - directory is locked"
-                }
+                Remove-Item $pidFile -Force -ErrorAction SilentlyContinue
             }
         }
+        
+        # Clean up any node_modules to ensure fresh install
+        $nodeModulesDir = Join-Path $targetWizardDir "backend\node_modules"
+        if (Test-Path $nodeModulesDir) {
+            Write-Info "Cleaning up old node_modules..."
+            # Use robocopy to delete node_modules (handles long paths better)
+            $emptyDir = Join-Path $env:TEMP "empty_$(Get-Random)"
+            New-Item -Path $emptyDir -ItemType Directory -Force | Out-Null
+            & robocopy $emptyDir $nodeModulesDir /MIR /R:1 /W:1 /NFL /NDL /NJH /NJS /NC /NS /NP 2>&1 | Out-Null
+            Remove-Item $emptyDir -Force
+            Remove-Item $nodeModulesDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        
+        # Clean up package-lock.json to avoid conflicts
+        $packageLock = Join-Path $targetWizardDir "backend\package-lock.json"
+        if (Test-Path $packageLock) {
+            Remove-Item $packageLock -Force -ErrorAction SilentlyContinue
+        }
+    }
+    else {
+        # Create new directory
+        Write-Info "Creating wizard directory..."
+        New-Item -Path $targetWizardDir -ItemType Directory -Force | Out-Null
     }
     
-    Write-Info "Copying provisioning wizard to $targetWizardDir..."
+    Write-Info "Copying provisioning wizard files..."
     try {
-        New-Item -Path $targetWizardDir -ItemType Directory -Force | Out-Null
-        Copy-Item -Path "$sourceWizardDir\*" -Destination $targetWizardDir -Recurse -Force
-        Write-Success "Provisioning wizard copied successfully"
+        # Use robocopy for more reliable copying (handles locked files better)
+        # /E = copy subdirectories including empty ones
+        # /R:2 = retry 2 times
+        # /W:1 = wait 1 second between retries
+        # /XO = exclude older files (don't overwrite newer files)
+        # /NFL /NDL = no file/directory listing
+        # /NJH /NJS = no job header/summary
+        $robocopyArgs = @(
+            $sourceWizardDir,
+            $targetWizardDir,
+            "/E", "/R:2", "/W:1", "/XO",
+            "/NFL", "/NDL", "/NJH", "/NJS"
+        )
+        
+        $result = & robocopy @robocopyArgs
+        $exitCode = $LASTEXITCODE
+        
+        # Robocopy exit codes: 0-7 are success codes, 8+ are errors
+        if ($exitCode -ge 8) {
+            throw "Robocopy failed with exit code $exitCode"
+        }
+        
+        Write-Success "Provisioning wizard files updated successfully"
     }
     catch {
         Write-ErrorCustom "Failed to copy provisioning wizard: $($_.Exception.Message)"
