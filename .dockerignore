@@ -1,0 +1,67 @@
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# Documentation
+*.md
+docs/
+test-results/
+
+# Test scripts
+test-*.ps1
+test-*.sh
+verify-*.sh
+multi-os-test.sh
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# OS files
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.temp
+tmp/
+temp/
+
+# Package files
+*.tar
+*.tar.gz
+*.zip
+*.gz
+*.bz2
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+
+# Claude AI context
+CLAUDE.md
+
+# Node modules (if any)
+node_modules/
+npm-debug.log*
+
+# Python (if any)
+__pycache__/
+*.py[cod]
+*.pyc
+venv/
+env/
+
+# Backup files
+*.bak
+*.backup
+*.old

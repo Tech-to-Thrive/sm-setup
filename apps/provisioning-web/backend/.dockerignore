@@ -1,0 +1,41 @@
+# Node modules
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Test files
+test-*.sh
+test-*.js
+*.test.js
+*.spec.js
+__tests__/
+coverage/
+.nyc_output
+
+# Development files
+.env
+.env.local
+.env.development
+.env.test
+*.log
+
+# Tools directory (scripts not needed in production)
+tools/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Documentation
+*.md
+
+# Git
+.git/
+.gitignore
