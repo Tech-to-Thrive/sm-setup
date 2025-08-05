@@ -13,8 +13,20 @@ The Stack Masters Provisioning Wizard frontend is pre-built and committed to the
 
 ## Build Requirements
 
-- Node.js 18+ (LTS recommended)
-- pnpm (preferred) or npm
+- Node.js 18+ (All versions supported including v23)
+- npm (automatically uses compatibility mode for newer versions)
+
+## Node.js Compatibility
+
+✅ **Fully Compatible With:**
+- Node.js v18 LTS
+- Node.js v20 LTS
+- Node.js v22
+- Node.js v23 (via WASM fallback)
+
+The build scripts automatically detect your Node.js version and apply appropriate settings:
+- **Node.js v23**: Uses `@rollup/wasm-node` and `--legacy-peer-deps`
+- **Earlier versions**: Uses native rollup binaries for optimal performance
 
 ## Build Process
 
@@ -29,6 +41,8 @@ cd apps/provisioning-web
 cd apps\provisioning-web
 .\build-frontend.ps1
 ```
+
+The build scripts handle all compatibility issues automatically!
 
 ## What the Build Does
 
@@ -87,8 +101,24 @@ frontend/dist/
 
 ### Build Fails
 - Ensure Node.js 18+ is installed
-- Clear node_modules and reinstall: `rm -rf node_modules && pnpm install`
-- Check for TypeScript/ESLint errors: `pnpm run lint`
+- Clear node_modules and reinstall: `rm -rf node_modules && npm install --legacy-peer-deps`
+- Check for TypeScript/ESLint errors: `npm run lint`
+
+### Node.js v23 Specific Issues
+If the build script doesn't work on Node.js v23:
+1. Verify `package.json` contains the rollup override:
+   ```json
+   "overrides": {
+     "rollup": "npm:@rollup/wasm-node"
+   }
+   ```
+2. Manually install with legacy peer deps:
+   ```bash
+   cd frontend
+   rm -rf node_modules package-lock.json
+   npm install --legacy-peer-deps
+   npm run build
+   ```
 
 ### Large Bundle Size
 - Review dependencies - remove unused packages
