@@ -1697,7 +1697,7 @@ function Start-ProvisioningWizard {
         }
         elseif ($processStarted) {
             Write-Success "Provisioning wizard started successfully!"
-            Write-Success "Health check passed: server is responding on port 58217"
+            # Silently proceed to show wizard info
             Show-WizardAccessInfo -HostBinding $hostBinding
         }
         else {
@@ -1787,7 +1787,7 @@ Troubleshooting:
     4. Restart manually: cd "$backendDir" && node server-integrated.js
 "@
         Set-Content -Path $wizardInfoFile -Value $wizardInfo
-        Write-Info "Wizard information saved to: $wizardInfoFile"
+        # Silently save wizard info - don't display to avoid duplicate messages
         
     }
     finally {
@@ -1899,11 +1899,7 @@ function Show-WizardAccessInfo {
         # Ignore token extraction errors
     }
     
-    Write-Host ""
-    Write-Host "✅ Wizard started successfully!" -ForegroundColor Green
-    Write-Host ""
-    
-    # Save wizard info (using $scriptDir which is script-scoped)
+    # Save wizard info silently
     $runDir = Join-Path $scriptDir "run"
     $wizardDir = Join-Path $runDir "provisioning-wizard"
     
@@ -1919,10 +1915,8 @@ Token: $tokenInfo
 Started: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
 "@ | Set-Content -Path $wizardInfoFile -Force
     
-    Write-Info "Wizard information saved to: $wizardInfoFile"
+    # Clear output and show only essential info
     Write-Host ""
-    
-    # Clear the screen and show only the critical info at the bottom
     Write-Host ""
     Write-Host ""
     Write-Host "========================================" -ForegroundColor Cyan
@@ -1933,11 +1927,9 @@ Started: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
     if ($tokenInfo) {
         Write-Host "Open this URL in your browser:" -ForegroundColor White
         Write-Host ""
-        Write-Host "  http://localhost:58217/?token=$tokenInfo" -ForegroundColor Yellow -BackgroundColor DarkBlue
+        Write-Host "  http://localhost:58217/?token=$tokenInfo" -ForegroundColor Yellow
         Write-Host ""
-        Write-Host "⚠️  SECURITY WARNING:" -ForegroundColor Red
-        Write-Host "    This token expires in 30 minutes!" -ForegroundColor Red
-        Write-Host "    Complete setup promptly or restart this script for a new token." -ForegroundColor Red
+        Write-Host "⚠️  This token expires in 30 minutes!" -ForegroundColor Red
         
         if ($HostBinding -ne "localhost") {
             Write-Host ""
@@ -1961,7 +1953,7 @@ Started: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
     else {
         Write-Host "Open this URL in your browser:" -ForegroundColor White
         Write-Host ""
-        Write-Host "  http://localhost:58217" -ForegroundColor Yellow -BackgroundColor DarkBlue
+        Write-Host "  http://localhost:58217" -ForegroundColor Yellow
     }
     
     Write-Host ""
