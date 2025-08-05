@@ -32,13 +32,15 @@ Set-Location $frontendDir
 if (-not (Test-Path "node_modules")) {
     Write-Host "Installing dependencies..." -ForegroundColor Cyan
     
-    if ($isNodeV23) {
-        Write-Host "Using --legacy-peer-deps for Node.js v23 compatibility" -ForegroundColor Yellow
-        & npm install --legacy-peer-deps
+    # Set npm to use local cache to avoid permission issues
+    $env:npm_config_cache = "$frontendDir\.npm-cache"
+    if (-not (Test-Path $env:npm_config_cache)) {
+        New-Item -Path $env:npm_config_cache -ItemType Directory -Force | Out-Null
     }
-    else {
-        & npm install
-    }
+    
+    # Always use --legacy-peer-deps due to date-fns version conflict
+    Write-Host "Using --legacy-peer-deps for dependency compatibility" -ForegroundColor Yellow
+    & npm install --legacy-peer-deps --cache $env:npm_config_cache
     
     if ($LASTEXITCODE -ne 0) {
         Write-Host "[ERROR] Failed to install dependencies" -ForegroundColor Red

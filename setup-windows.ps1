@@ -790,6 +790,56 @@ function Setup-ProvisioningWizard {
         throw "Failed to copy provisioning wizard"
     }
     
+    # Build the React frontend if not already built
+    Write-Info "Checking React frontend build..."
+    $frontendDistPath = Join-Path $targetWizardDir "backend\frontend\dist"
+    
+    if (-not (Test-Path $frontendDistPath)) {
+        Write-Info "React build not found. Building frontend..."
+        
+        # Check if build script exists
+        $buildScript = Join-Path $targetWizardDir "build-frontend.ps1"
+        if (Test-Path $buildScript) {
+            # Save current directory
+            $currentDir = Get-Location
+            
+            try {
+                # Run the build script
+                Set-Location $targetWizardDir
+                & $buildScript
+                
+                if ($LASTEXITCODE -eq 0) {
+                    Write-Success "React frontend built successfully"
+                }
+                else {
+                    Write-ErrorCustom "Failed to build React frontend"
+                    Write-ErrorCustom "The wizard cannot function without the React UI"
+                    Write-Info "Please check the build errors above and fix any dependency issues"
+                    Set-Location $currentDir
+                    exit 1
+                }
+            }
+            catch {
+                Write-ErrorCustom "Error building React frontend: $($_.Exception.Message)"
+                Write-ErrorCustom "The wizard cannot function without the React UI"
+                Set-Location $currentDir
+                exit 1
+            }
+            finally {
+                # Return to original directory
+                Set-Location $currentDir
+            }
+        }
+        else {
+            Write-ErrorCustom "Frontend build script not found at: $buildScript"
+            Write-ErrorCustom "Cannot start wizard without React UI build capability"
+            exit 1
+        }
+    }
+    else {
+        Write-Success "React frontend already built"
+    }
+    
     return $targetWizardDir
 }
 

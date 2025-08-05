@@ -33,12 +33,13 @@ cd "$FRONTEND_DIR"
 if [ ! -d "node_modules" ]; then
     echo "Installing dependencies..."
     
-    if [ "$IS_NODE_V23" = true ]; then
-        echo "Using --legacy-peer-deps for Node.js v23 compatibility"
-        npm install --legacy-peer-deps
-    else
-        npm install
-    fi
+    # Set npm to use local cache to avoid permission issues
+    export npm_config_cache="$FRONTEND_DIR/.npm-cache"
+    mkdir -p "$npm_config_cache"
+    
+    # Always use --legacy-peer-deps due to date-fns version conflict
+    echo "Using --legacy-peer-deps for dependency compatibility"
+    npm install --legacy-peer-deps --cache "$npm_config_cache"
     
     if [ $? -ne 0 ]; then
         echo "[ERROR] Failed to install dependencies"

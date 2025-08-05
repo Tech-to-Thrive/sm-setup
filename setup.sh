@@ -105,6 +105,14 @@ log_error() {
 
 # Check if running as root
 check_root() {
+    # On macOS, we'll handle privilege escalation differently
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        # For macOS, we'll check for sudo access when needed
+        log_info "Running on macOS - will request sudo privileges when needed"
+        return 0
+    fi
+    
+    # For other systems, require root
     if [[ $EUID -ne 0 ]]; then
         log_error "This script must be run as root"
         log_info "Please run: sudo $0"
@@ -114,6 +122,12 @@ check_root() {
 
 # Detect OS type (server vs desktop)
 detect_os_type() {
+    # macOS is always desktop
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        echo "desktop"
+        return
+    fi
+    
     # Check if this is a server or desktop environment
     if [ -f /etc/os-release ]; then
         . /etc/os-release
@@ -135,7 +149,12 @@ detect_os_type() {
 detect_os() {
     log_info "Detecting operating system..."
     
-    if [ -f /etc/os-release ]; then
+    # Check for macOS first
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        OS="macos"
+        OS_VERSION=$(sw_vers -productVersion)
+        OS_NAME="macOS $OS_VERSION"
+    elif [ -f /etc/os-release ]; then
         . /etc/os-release
         OS=$ID
         # Handle distributions without VERSION_ID (like Arch)
@@ -151,7 +170,18 @@ detect_os() {
     fi
     
     # Detect package manager
-    if command -v apt-get &> /dev/null; then
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        # Check if Homebrew is installed
+        if command -v brew &> /dev/null; then
+            PKG_MANAGER="brew"
+            PKG_UPDATE="brew update"
+            PKG_INSTALL="brew install"
+        else
+            log_error "Homebrew not found. Please install Homebrew first:"
+            log_error "/bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
+            exit 1
+        fi
+    elif command -v apt-get &> /dev/null; then
         PKG_MANAGER="apt"
         PKG_UPDATE="apt-get update -y"
         PKG_INSTALL="apt-get install -y"
@@ -172,7 +202,7 @@ detect_os() {
         PKG_UPDATE="zypper refresh"
         PKG_INSTALL="zypper install -y"
     else
-        log_error "No supported package manager found (apt, yum, dnf, pacman, zypper)"
+        log_error "No supported package manager found (brew, apt, yum, dnf, pacman, zypper)"
         exit 1
     fi
     
@@ -191,6 +221,9 @@ check_system_packages() {
     
     local installed_packages=()
     local missing_packages=()
+    
+    # Global variable to track if any installation is needed
+    needs_installation=false
     
     # Check Git
     log_info "Checking Git..."
@@ -251,27 +284,18 @@ check_system_packages() {
 
 # Confirm installation
 confirm_installation() {
-    local needs_installation=false
     local install_list=()
     
     if [ "$GIT_INSTALLED" = false ]; then
-        needs_installation=true
         install_list+=("- Git")
     fi
     
     if [ "$GH_INSTALLED" = false ]; then
-        needs_installation=true
         install_list+=("- GitHub CLI")
     fi
     
     if [ "$DOCKER_INSTALLED" = false ]; then
-        needs_installation=true
         install_list+=("- Docker")
-    fi
-    
-    if [ "$needs_installation" = false ]; then
-        log_success "All required packages are already installed!"
-        return 0
     fi
     
     echo ""
@@ -568,6 +592,9 @@ start_provisioning_wizard() {
         
         # Install Node.js based on package manager
         case $PKG_MANAGER in
+            brew)
+                brew install node
+                ;;
             apt)
                 curl -fsSL https://deb.nodesource.com/setup_lts.x | bash -
                 apt-get install -y nodejs
@@ -667,8 +694,14 @@ validate_system_requirements() {
     
     # Check disk space (minimum 10GB - sufficient for Docker images and data)
     log_info "Checking disk space..."
-    AVAILABLE_SPACE=$(df -BG / 2>/dev/null | tail -1 | awk '{print $4}' | sed 's/G//')
-    TOTAL_SPACE=$(df -BG / 2>/dev/null | tail -1 | awk '{print $2}' | sed 's/G//')
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        # macOS doesn't support -B flag, use -g instead
+        AVAILABLE_SPACE=$(df -g / 2>/dev/null | tail -1 | awk '{print $4}')
+        TOTAL_SPACE=$(df -g / 2>/dev/null | tail -1 | awk '{print $2}')
+    else
+        AVAILABLE_SPACE=$(df -BG / 2>/dev/null | tail -1 | awk '{print $4}' | sed 's/G//')
+        TOTAL_SPACE=$(df -BG / 2>/dev/null | tail -1 | awk '{print $2}' | sed 's/G//')
+    fi
     
     if [ -z "$AVAILABLE_SPACE" ] || [ "$AVAILABLE_SPACE" -lt 10 ]; then
         log_error "Insufficient disk space: ${AVAILABLE_SPACE:-0}GB available, 10GB required"
@@ -682,9 +715,22 @@ validate_system_requirements() {
     
     # Check memory (minimum 4GB)
     log_info "Checking system memory..."
-    # Get memory in MB first for accuracy, then convert to GB
-    TOTAL_MEM_MB=$(free -m | awk '/^Mem:/{print $2}')
-    AVAILABLE_MEM_MB=$(free -m | awk '/^Mem:/{print $7}')
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        # macOS doesn't have 'free' command, use sysctl
+        TOTAL_MEM_BYTES=$(sysctl -n hw.memsize)
+        TOTAL_MEM_MB=$((TOTAL_MEM_BYTES / 1024 / 1024))
+        # Get free memory from vm_stat
+        FREE_PAGES=$(vm_stat | grep "Pages free" | awk '{print $3}' | sed 's/\.//')
+        INACTIVE_PAGES=$(vm_stat | grep "Pages inactive" | awk '{print $3}' | sed 's/\.//')
+        SPECULATIVE_PAGES=$(vm_stat | grep "Pages speculative" | awk '{print $3}' | sed 's/\.//')
+        # Page size is usually 4096 bytes
+        PAGE_SIZE=4096
+        AVAILABLE_MEM_MB=$(( (FREE_PAGES + INACTIVE_PAGES + SPECULATIVE_PAGES) * PAGE_SIZE / 1024 / 1024 ))
+    else
+        # Get memory in MB first for accuracy, then convert to GB
+        TOTAL_MEM_MB=$(free -m | awk '/^Mem:/{print $2}')
+        AVAILABLE_MEM_MB=$(free -m | awk '/^Mem:/{print $7}')
+    fi
     TOTAL_MEM=$(echo "scale=1; $TOTAL_MEM_MB / 1024" | bc 2>/dev/null || echo "$((TOTAL_MEM_MB / 1024))")
     AVAILABLE_MEM=$(echo "scale=1; $AVAILABLE_MEM_MB / 1024" | bc 2>/dev/null || echo "$((AVAILABLE_MEM_MB / 1024))")
     
@@ -697,7 +743,12 @@ validate_system_requirements() {
     
     # Check CPU cores (recommend at least 2)
     log_info "Checking CPU cores..."
-    CPU_CORES=$(nproc)
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        # macOS doesn't have nproc, use sysctl
+        CPU_CORES=$(sysctl -n hw.ncpu)
+    else
+        CPU_CORES=$(nproc)
+    fi
     if [ "$CPU_CORES" -lt 2 ]; then
         log_warning "Only $CPU_CORES CPU core(s) detected. Performance may be limited."
     else
@@ -781,9 +832,34 @@ validate_system_requirements() {
         return 0
     }
     
-    # Check wizard port
-    if ! check_port_availability 58217 "Provisioning Wizard"; then
-        ((validation_errors++))
+    # Special handling for wizard port - try to clean up existing processes
+    if ! check_port_availability 58217 "Provisioning Wizard" 2>/dev/null; then
+        log_warning "Port 58217 is in use. Attempting to stop existing wizard..."
+        
+        # Try to stop existing wizard processes
+        if command -v lsof >/dev/null 2>&1; then
+            local pids=$(lsof -ti:58217 2>/dev/null)
+            if [ -n "$pids" ]; then
+                for pid in $pids; do
+                    log_info "Stopping process on port 58217 (PID: $pid)..."
+                    kill -TERM "$pid" 2>/dev/null || true
+                done
+                sleep 2
+                # Force kill if still running
+                for pid in $pids; do
+                    kill -KILL "$pid" 2>/dev/null || true
+                done
+                sleep 1
+            fi
+        fi
+        
+        # Check again after cleanup
+        if ! check_port_availability 58217 "Provisioning Wizard" 2>/dev/null; then
+            log_error "Port 58217 is still in use after cleanup attempt"
+            ((validation_errors++))
+        else
+            log_success "Port 58217 cleared and available for wizard ✓"
+        fi
     else
         log_success "Port 58217 available for wizard ✓"
     fi
@@ -807,7 +883,10 @@ validate_system_requirements() {
     fi
     
     # Check if running as root
-    if [[ $EUID -ne 0 ]]; then
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        # On macOS, we don't require root for validation
+        log_success "Running on macOS - root not required ✓"
+    elif [[ $EUID -ne 0 ]]; then
         log_error "This script must be run as root"
         ((validation_errors++))
     else
@@ -872,6 +951,45 @@ setup_provisioning_wizard() {
     fi
     
     log_success "Provisioning wizard files updated successfully"
+    
+    # Build the React frontend if not already built
+    log_info "Checking React frontend build..."
+    if [ ! -d "$WIZARD_DIR/backend/frontend/dist" ]; then
+        log_info "React build not found. Building frontend..."
+        
+        # Check if build script exists
+        BUILD_SCRIPT="$WIZARD_DIR/build-frontend.sh"
+        if [ -f "$BUILD_SCRIPT" ]; then
+            # Make it executable
+            chmod +x "$BUILD_SCRIPT"
+            
+            # Save current directory
+            CURRENT_DIR=$(pwd)
+            
+            # Run the build script
+            cd "$WIZARD_DIR"
+            if ./build-frontend.sh; then
+                log_success "React frontend built successfully"
+            else
+                log_error "Failed to build React frontend"
+                log_error "The wizard cannot function without the React UI"
+                log_info "Please check the build errors above and fix any dependency issues"
+                
+                # Return to original directory
+                cd "$CURRENT_DIR"
+                exit 1
+            fi
+            
+            # Return to original directory
+            cd "$CURRENT_DIR"
+        else
+            log_error "Frontend build script not found at: $BUILD_SCRIPT"
+            log_error "Cannot start wizard without React UI build capability"
+            exit 1
+        fi
+    else
+        log_success "React frontend already built"
+    fi
 }
 
 # Stop any existing wizard processes (aggressive cleanup like PowerShell)
@@ -1112,14 +1230,26 @@ test_wizard_diagnostics() {
     fi
     
     # Check available memory
-    local available_mem_mb=$(free -m | awk '/^Mem:/{print $7}')
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        # macOS memory check
+        local free_pages=$(vm_stat | grep "Pages free" | awk '{print $3}' | sed 's/\.//')
+        local inactive_pages=$(vm_stat | grep "Pages inactive" | awk '{print $3}' | sed 's/\.//')
+        local page_size=4096
+        local available_mem_mb=$(( (free_pages + inactive_pages) * page_size / 1024 / 1024 ))
+    else
+        local available_mem_mb=$(free -m | awk '/^Mem:/{print $7}')
+    fi
     local available_mem_gb=$(echo "scale=1; $available_mem_mb / 1024" | bc 2>/dev/null || echo "$((available_mem_mb / 1024))")
     if [ "$available_mem_mb" -lt 1024 ]; then
         warnings+=("Low available memory: ${available_mem_gb}GB (recommend 1GB+)")
     fi
     
     # Check disk space in temp directory
-    local temp_disk=$(df -BG /tmp 2>/dev/null | tail -1 | awk '{print $4}' | sed 's/G//')
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        local temp_disk=$(df -g /tmp 2>/dev/null | tail -1 | awk '{print $4}')
+    else
+        local temp_disk=$(df -BG /tmp 2>/dev/null | tail -1 | awk '{print $4}' | sed 's/G//')
+    fi
     if [ -n "$temp_disk" ] && [ "$temp_disk" -lt 2 ]; then
         issues+=("Low disk space on /tmp: ${temp_disk}GB (need 2GB+)")
     fi
@@ -1169,6 +1299,9 @@ start_provisioning_wizard() {
         
         # Install Node.js based on package manager
         case $PKG_MANAGER in
+            brew)
+                brew install node
+                ;;
             apt)
                 curl -fsSL https://deb.nodesource.com/setup_lts.x | bash -
                 apt-get install -y nodejs
@@ -1212,6 +1345,10 @@ start_provisioning_wizard() {
     log_info "Installing dependencies..."
     cd "$BACKEND_DIR"
     
+    # Set npm to use local cache to avoid permission issues
+    export npm_config_cache="$BACKEND_DIR/.npm-cache"
+    mkdir -p "$npm_config_cache"
+    
     # Simple direct approach - just run npm install
     log_info "Running npm install (this may take a minute)..."
     
@@ -1219,14 +1356,14 @@ start_provisioning_wizard() {
     npm_install_output=""
     
     # Method 1: Direct invocation with output capture
-    if npm_install_output=$(npm install --production 2>&1); then
+    if npm_install_output=$(npm install --production --cache "$npm_config_cache" 2>&1); then
         npm_install_success=true
         log_success "npm install completed successfully"
     else
         log_warning "Direct npm invocation failed, trying alternative method..."
         
         # Method 2: Try with different flags
-        if npm_install_output=$(npm install --production --no-audit --no-fund 2>&1); then
+        if npm_install_output=$(npm install --production --no-audit --no-fund --cache "$npm_config_cache" 2>&1); then
             npm_install_success=true
             log_success "npm install completed successfully (alternative method)"
         else
@@ -1234,7 +1371,7 @@ start_provisioning_wizard() {
             log_warning "Trying with cache clean..."
             npm cache clean --force >/dev/null 2>&1 || true
             
-            if npm_install_output=$(npm install --production 2>&1); then
+            if npm_install_output=$(npm install --production --cache "$npm_config_cache" 2>&1); then
                 npm_install_success=true
                 log_success "npm install completed successfully (after cache clean)"
             fi
@@ -1281,7 +1418,8 @@ start_provisioning_wizard() {
     
     # Start Node.js server in background with timestamped log
     WIZARD_LOG_TIMESTAMP=$(date '+%Y%m%d-%H%M%S')
-    nohup node server-integrated.js > "$LOGS_DIR/wizard-$WIZARD_LOG_TIMESTAMP.log" 2>&1 &
+    WIZARD_LOG="$LOGS_DIR/wizard-$WIZARD_LOG_TIMESTAMP.log"
+    nohup node server-integrated.js > "$WIZARD_LOG" 2>&1 &
     WIZARD_PID=$!
     
     # Save PID for potential cleanup
@@ -1358,8 +1496,8 @@ start_provisioning_wizard() {
         exit 1
     elif [ "$process_started" = true ]; then
         log_success "Provisioning wizard started successfully!"
-        # Silently proceed to show wizard info
-        show_wizard_access_info "$HOST_BINDING"
+        # Pass the log file path to show_wizard_access_info
+        show_wizard_access_info "$HOST_BINDING" "$WIZARD_LOG"
     else
         # Process is running but not responding
         log_warning "Node.js process is running but server is not responding on port 58217"
@@ -1387,17 +1525,35 @@ start_provisioning_wizard() {
 # Show wizard access information
 show_wizard_access_info() {
     local host_binding="$1"
+    local wizard_log="$2"
+    
+    # Wait a bit for token to appear in log
+    sleep 2
     
     # Try to extract token from wizard output log
     local token_info=""
-    local wizard_log=$(ls -t "$LOGS_DIR"/wizard-*.log 2>/dev/null | head -1)
+    
+    # If no log file passed, find the latest one
+    if [ -z "$wizard_log" ]; then
+        wizard_log=$(ls -t "$LOGS_DIR"/wizard-*.log 2>/dev/null | head -1)
+    fi
     
     if [ -n "$wizard_log" ] && [ -f "$wizard_log" ]; then
-        # Extract token from log - try multiple patterns
-        token_info=$(grep -oP 'Token:\s*\K[a-f0-9]{64}' "$wizard_log" 2>/dev/null || true)
-        if [ -z "$token_info" ]; then
-            # Try alternative pattern
-            token_info=$(grep -oP 'token=\K[a-f0-9]{64}' "$wizard_log" 2>/dev/null || true)
+        # Extract token from log - macOS grep doesn't support -P, use different approach
+        if [[ "$OSTYPE" == "darwin"* ]]; then
+            # macOS approach - use sed
+            token_info=$(grep "Token:" "$wizard_log" 2>/dev/null | sed -n 's/.*Token:[[:space:]]*\([a-f0-9]\{64\}\).*/\1/p' | head -1 || true)
+            if [ -z "$token_info" ]; then
+                # Try alternative pattern
+                token_info=$(grep "token=" "$wizard_log" 2>/dev/null | sed -n 's/.*token=\([a-f0-9]\{64\}\).*/\1/p' | head -1 || true)
+            fi
+        else
+            # Linux approach - use grep -P
+            token_info=$(grep -oP 'Token:\s*\K[a-f0-9]{64}' "$wizard_log" 2>/dev/null || true)
+            if [ -z "$token_info" ]; then
+                # Try alternative pattern
+                token_info=$(grep -oP 'token=\K[a-f0-9]{64}' "$wizard_log" 2>/dev/null || true)
+            fi
         fi
     fi
     
@@ -1490,27 +1646,33 @@ main() {
     # Check system packages
     check_system_packages
     
-    # Confirm installation with user
-    if ! confirm_installation; then
-        log_info "Setup cancelled"
-        exit 0
-    fi
-    
-    # System preparation
-    update_system
-    install_core_deps
-    
-    # Install missing components
-    if [ "$GIT_INSTALLED" = false ]; then
-        install_git
-    fi
-    
-    if [ "$GH_INSTALLED" = false ]; then
-        install_github_cli
-    fi
-    
-    if [ "$DOCKER_INSTALLED" = false ]; then
-        install_docker
+    # Only proceed with installation if packages are missing
+    if [ "$needs_installation" = true ]; then
+        # Confirm installation with user
+        if ! confirm_installation; then
+            log_info "Setup cancelled"
+            exit 0
+        fi
+        
+        # System preparation - only update if we need to install packages
+        update_system
+        install_core_deps
+        
+        # Install missing components
+        if [ "$GIT_INSTALLED" = false ]; then
+            install_git
+        fi
+        
+        if [ "$GH_INSTALLED" = false ]; then
+            install_github_cli
+        fi
+        
+        if [ "$DOCKER_INSTALLED" = false ]; then
+            install_docker
+        fi
+    else
+        # Skip all package installation steps
+        log_info "Skipping package installation - all requirements met"
     fi
     
     # Configure system
