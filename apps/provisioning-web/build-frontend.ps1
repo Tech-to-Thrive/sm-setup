@@ -30,7 +30,7 @@ try {
     exit 1
 }
 
-# Check Node version
+# Check Node version and provide compatibility info
 $versionNum = [int]($nodeVersion -replace 'v(\d+)\..*', '$1')
 if ($versionNum -lt 18) {
     Write-Host "ERROR: Node.js version 18+ is required (found: $nodeVersion)" -ForegroundColor Red
@@ -38,6 +38,13 @@ if ($versionNum -lt 18) {
 }
 
 Write-Host "✓ Node.js $nodeVersion detected" -ForegroundColor Green
+
+# Provide Node.js v23 compatibility info
+if ($versionNum -eq 23) {
+    Write-Host "ℹ️ Node.js v23 detected - using optimized configuration for compatibility" -ForegroundColor Cyan
+    Write-Host "   • Rollup WASM fallback enabled" -ForegroundColor Gray
+    Write-Host "   • Tailwind CSS v3 configuration active" -ForegroundColor Gray
+}
 
 # Check for package manager
 $pkgManager = $null
@@ -52,10 +59,15 @@ if (Get-Command pnpm -ErrorAction SilentlyContinue) {
     exit 1
 }
 
-# Install dependencies
+# Install dependencies with compatibility options
 Write-Host ""
 Write-Host "Installing dependencies..." -ForegroundColor Yellow
-& $pkgManager install
+if ($versionNum -eq 23) {
+    Write-Host "Using --legacy-peer-deps for Node.js v23 compatibility" -ForegroundColor Cyan
+    & $pkgManager install --legacy-peer-deps
+} else {
+    & $pkgManager install
+}
 if ($LASTEXITCODE -ne 0) {
     Write-Host "ERROR: Failed to install dependencies" -ForegroundColor Red
     exit 1

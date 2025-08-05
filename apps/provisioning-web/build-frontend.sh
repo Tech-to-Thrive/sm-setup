@@ -27,7 +27,7 @@ if ! command -v node &> /dev/null; then
     exit 1
 fi
 
-# Check Node version
+# Check Node version and provide compatibility info
 NODE_VERSION=$(node -v | cut -d'v' -f2 | cut -d'.' -f1)
 if [ "$NODE_VERSION" -lt 18 ]; then
     echo "ERROR: Node.js version 18+ is required (found: $(node -v))"
@@ -35,6 +35,13 @@ if [ "$NODE_VERSION" -lt 18 ]; then
 fi
 
 echo "✓ Node.js $(node -v) detected"
+
+# Provide Node.js v23 compatibility info
+if [ "$NODE_VERSION" -eq 23 ]; then
+    echo "ℹ️ Node.js v23 detected - using optimized configuration for compatibility"
+    echo "   • Rollup WASM fallback enabled"
+    echo "   • Tailwind CSS v3 configuration active"
+fi
 
 # Check if pnpm is installed (as specified in package.json)
 if command -v pnpm &> /dev/null; then
@@ -48,10 +55,15 @@ else
     exit 1
 fi
 
-# Install dependencies
+# Install dependencies with compatibility options
 echo ""
 echo "Installing dependencies..."
-$PKG_MANAGER install
+if [ "$NODE_VERSION" -eq 23 ]; then
+    echo "Using --legacy-peer-deps for Node.js v23 compatibility"
+    $PKG_MANAGER install --legacy-peer-deps
+else
+    $PKG_MANAGER install
+fi
 
 # Run the build
 echo ""
