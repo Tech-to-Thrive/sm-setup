@@ -991,13 +991,12 @@ start_provisioning_wizard() {
     
     # Test if server is accessible
     if curl -s "http://$HOST_BINDING:58217" >/dev/null 2>&1; then
-        log_success "Provisioning wizard is running!"
+        # Silently proceed to show wizard info
+        show_wizard_access_info "$HOST_BINDING"
     else
         log_warning "Server may still be starting up. Check manually if needed."
+        show_wizard_access_info "$HOST_BINDING"
     fi
-    
-    # Display access information
-    show_wizard_access_info "$HOST_BINDING"
     
     cd "$SCRIPT_DIR"
 }
@@ -1006,50 +1005,65 @@ start_provisioning_wizard() {
 show_wizard_access_info() {
     local host_binding="$1"
     
-    echo ""
-    echo "========================================"
-    echo "Stack Masters Provisioning Wizard"
-    echo "========================================"
-    echo ""
-    echo "Access the wizard at:"
+    # Try to extract token from wizard output log
+    local token_info=""
+    local wizard_log=$(ls -t "$LOGS_DIR"/wizard-*.log 2>/dev/null | head -1)
     
-    if [ "$host_binding" = "localhost" ]; then
-        echo "  http://localhost:58217"
-    else
-        echo "  http://localhost:58217"
+    if [ -n "$wizard_log" ] && [ -f "$wizard_log" ]; then
+        # Extract token from log
+        token_info=$(grep -oP 'Token:\s*\K[a-f0-9]{64}' "$wizard_log" 2>/dev/null || true)
+    fi
+    
+    # Save wizard info
+    mkdir -p "$SCRIPT_DIR/run/provisioning-wizard"
+    local wizard_info_file="$SCRIPT_DIR/run/provisioning-wizard/wizard-info.txt"
+    {
+        echo "Wizard URL: http://localhost:58217/?token=$token_info"
+        echo "Token: $token_info"
+        echo "Started: $(date '+%Y-%m-%d %H:%M:%S')"
+    } > "$wizard_info_file"
+    
+    # Clear output and show only essential info
+    echo ""
+    echo ""
+    echo ""
+    echo "========================================"
+    echo "        NEXT STEP - OPEN YOUR BROWSER"
+    echo "========================================"
+    echo ""
+    
+    if [ -n "$token_info" ]; then
+        echo "Open this URL in your browser:"
         echo ""
-        echo "From a remote machine:"
+        echo -e "${YELLOW}  http://localhost:58217/?token=$token_info${NC}"
+        echo ""
+        echo -e "${RED}⚠️  This token expires in 30 minutes!${NC}"
         
-        # Show network interfaces for remote access
-        if command -v ip >/dev/null 2>&1; then
-            ip -4 addr show | grep inet | grep -v 127.0.0.1 | awk '{print $2}' | cut -d/ -f1 | while read -r ip; do
-                echo "  http://$ip:58217"
-            done
-        elif command -v hostname >/dev/null 2>&1; then
-            local_ip=$(hostname -I | awk '{print $1}')
-            if [ -n "$local_ip" ]; then
-                echo "  http://$local_ip:58217"
+        if [ "$host_binding" != "localhost" ]; then
+            echo ""
+            echo "Remote access (if needed):"
+            # Show network interfaces for remote access
+            if command -v ip >/dev/null 2>&1; then
+                ip -4 addr show | grep inet | grep -v 127.0.0.1 | awk '{print $2}' | cut -d/ -f1 | while read -r ip; do
+                    echo "  http://$ip:58217/?token=$token_info"
+                done
+            elif command -v hostname >/dev/null 2>&1; then
+                local_ip=$(hostname -I | awk '{print $1}')
+                if [ -n "$local_ip" ]; then
+                    echo "  http://$local_ip:58217/?token=$token_info"
+                fi
+            else
+                echo "  http://YOUR-SERVER-IP:58217/?token=$token_info"
             fi
-        else
-            echo "  http://YOUR-SERVER-IP:58217"
         fi
+    else
+        echo "Open this URL in your browser:"
+        echo ""
+        echo -e "${YELLOW}  http://localhost:58217${NC}"
     fi
     
     echo ""
-    echo "The wizard will guide you through:"
-    echo "  - Selecting your Stack Masters repository"
-    echo "  - Configuring your environment"
-    echo "  - Deploying your services"
-    echo ""
-    echo "💡 Keep this terminal window open while using the wizard"
-    echo ""
-    echo "ℹ️  To restart the wizard, simply run this script again:"
-    echo "  ./setup.sh"
-    echo ""
-    echo "✨ The wizard will auto-shutdown 10 minutes after deployment completes"
-    echo ""
-    echo "Log file:"
-    echo "  Setup: $LOGFILE"
+    echo "========================================"
     echo ""
 }
 
@@ -1131,25 +1145,7 @@ main() {
     setup_provisioning_wizard
     start_provisioning_wizard
     
-    echo ""
-    echo "=============================================="
-    log_success "Stack Masters initial setup completed!"
-    echo "=============================================="
-    echo ""
-    log_info "The Stack Masters Provisioning Wizard is now running"
-    log_info "Use the web interface to complete your stack deployment"
-    echo ""
-    log_info "Next steps:"
-    echo "  1. Open the provisioning wizard in your browser"
-    echo "  2. Select your stack configuration"
-    echo "  3. Follow the guided setup process"
-    echo ""
-    log_info "The wizard will handle:"
-    echo "  - GitHub authentication"
-    echo "  - Repository selection and cloning"
-    echo "  - Environment configuration" 
-    echo "  - Service deployment"
-    echo "  - SSL certificate setup"
+    # Keep output minimal - show_wizard_access_info already shows the important info
     echo ""
 }
 
