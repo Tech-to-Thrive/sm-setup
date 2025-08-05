@@ -58,8 +58,29 @@ app.use('/api/deploy', deployLimiter);
 app.use('/api/build', deployLimiter);
 app.use('/api/validate', sensitiveLimiter);
 
-// Apply authentication
-app.use(security.requireToken());
+// Serve static assets BEFORE authentication middleware
+// This allows CSS, JS, and other assets to load without a token
+const reactBuildPath = process.env.NODE_ENV === 'production' 
+  ? path.join(__dirname, 'frontend/dist')
+  : path.join(__dirname, '../frontend/dist');
+  
+if (fs.existsSync(reactBuildPath)) {
+    console.log(`Serving React build from: ${reactBuildPath}`);
+    // Serve static assets without authentication
+    app.use('/assets', express.static(path.join(reactBuildPath, 'assets')));
+    app.use('/favicon.ico', express.static(path.join(reactBuildPath, 'favicon.ico')));
+} else {
+    console.log(`React build not found at: ${reactBuildPath}`);
+}
+
+// Apply authentication (but not to static assets)
+app.use((req, res, next) => {
+    // Skip authentication for static assets
+    if (req.path.startsWith('/assets/') || req.path === '/favicon.ico') {
+        return next();
+    }
+    return security.requireToken()(req, res, next);
+});
 
 // Apply CSRF protection
 const csrf = security.csrfProtection();
@@ -2154,21 +2175,7 @@ app.get('/logo.png', (req, res) => {
   });
 });
 
-// Serve static files from React build (if exists)
-// In Docker, the frontend dist is at /app/frontend/dist
-const reactBuildPath = process.env.NODE_ENV === 'production' 
-  ? path.join(__dirname, 'frontend/dist')
-  : path.join(__dirname, '../frontend/dist');
-  
-if (fs.existsSync(reactBuildPath)) {
-    console.log(`Serving React build from: ${reactBuildPath}`);
-    // Serve static assets EXCEPT index.html to allow our auth check
-    app.use(express.static(reactBuildPath, {
-        index: false // Prevent automatic index.html serving
-    }));
-} else {
-    console.log(`React build not found at: ${reactBuildPath}`);
-}
+// Static files are already served before authentication middleware
 
 // Serve the UI - React Only
 app.get('/', (req, res) => {
