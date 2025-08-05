@@ -17,41 +17,71 @@ class ResourceValidator {
    */
   static async checkDiskSpace(requiredGB = 10) {
     try {
-      // Check Docker directory space
-      const dockerDir = '/var/lib/docker';
+      const isWindows = os.platform() === 'win32';
       
-      // Use df to check disk space
-      const { stdout } = await safeExecute('df', ['-BG', dockerDir]);
-      const lines = stdout.split('\n').filter(line => line.trim());
-      
-      // Parse df output - find line containing docker dir or its mount point
-      let dockerLine = lines.find(line => line.includes(dockerDir));
-      if (!dockerLine && lines.length > 1) {
-        // If docker dir not found, use the last line (usually the mount point)
-        dockerLine = lines[lines.length - 1];
+      if (isWindows) {
+        // Windows: Check C: drive space using PowerShell
+        const { stdout } = await safeExecute('powershell', [
+          '-Command', 
+          'Get-CimInstance -ClassName Win32_LogicalDisk -Filter "DeviceID=\'C:\'" | Select-Object @{Name="FreeSpaceGB";Expression={[math]::Round($_.FreeSpace/1GB,2)}}'
+        ]);
+        
+        const lines = stdout.split('\n').filter(line => line.trim());
+        const spaceLine = lines.find(line => line.includes('.') || line.match(/^\d+$/));
+        
+        if (!spaceLine) {
+          throw new Error('Could not parse disk space output');
+        }
+        
+        const availableGB = Math.floor(parseFloat(spaceLine.trim()));
+        
+        return {
+          location: 'C:\\',
+          available: availableGB,
+          required: requiredGB,
+          sufficient: availableGB >= requiredGB,
+          message: availableGB < requiredGB 
+            ? `Insufficient disk space. Need ${requiredGB}GB, have ${availableGB}GB available`
+            : `Disk space OK: ${availableGB}GB available (need ${requiredGB}GB)`
+        };
+      } else {
+        // Linux: Check Docker directory space
+        const dockerDir = '/var/lib/docker';
+        
+        // Use df to check disk space
+        const { stdout } = await safeExecute('df', ['-BG', dockerDir]);
+        const lines = stdout.split('\n').filter(line => line.trim());
+        
+        // Parse df output - find line containing docker dir or its mount point
+        let dockerLine = lines.find(line => line.includes(dockerDir));
+        if (!dockerLine && lines.length > 1) {
+          // If docker dir not found, use the last line (usually the mount point)
+          dockerLine = lines[lines.length - 1];
+        }
+        
+        if (!dockerLine) {
+          throw new Error('Could not determine disk space');
+        }
+        
+        // Parse available space (4th column in df output)
+        const parts = dockerLine.split(/\s+/);
+        const availableStr = parts[3] || '0G';
+        const availableGB = parseInt(availableStr.replace('G', ''));
+        
+        return {
+          location: dockerDir,
+          available: availableGB,
+          required: requiredGB,
+          sufficient: availableGB >= requiredGB,
+          message: availableGB < requiredGB 
+            ? `Insufficient disk space. Need ${requiredGB}GB, have ${availableGB}GB available`
+            : `Disk space OK: ${availableGB}GB available (need ${requiredGB}GB)`
+        };
       }
-      
-      if (!dockerLine) {
-        throw new Error('Could not determine disk space');
-      }
-      
-      // Parse available space (4th column in df output)
-      const parts = dockerLine.split(/\s+/);
-      const availableStr = parts[3] || '0G';
-      const availableGB = parseInt(availableStr.replace('G', ''));
-      
-      return {
-        location: dockerDir,
-        available: availableGB,
-        required: requiredGB,
-        sufficient: availableGB >= requiredGB,
-        message: availableGB < requiredGB 
-          ? `Insufficient disk space. Need ${requiredGB}GB, have ${availableGB}GB available`
-          : `Disk space OK: ${availableGB}GB available (need ${requiredGB}GB)`
-      };
     } catch (error) {
+      const isWindows = os.platform() === 'win32';
       return {
-        location: '/var/lib/docker',
+        location: isWindows ? 'C:\\' : '/var/lib/docker',
         available: 0,
         required: requiredGB,
         sufficient: false,
@@ -68,33 +98,70 @@ class ResourceValidator {
    */
   static async checkMemory(requiredGB = 4) {
     try {
-      // Read memory info from /proc/meminfo
-      const meminfo = await fsPromises.readFile('/proc/meminfo', 'utf8');
+      const isWindows = os.platform() === 'win32';
       
-      // Parse total and available memory
-      const totalMatch = meminfo.match(/MemTotal:\s+(\d+)\s+kB/);
-      const availableMatch = meminfo.match(/MemAvailable:\s+(\d+)\s+kB/);
-      
-      if (!totalMatch || !availableMatch) {
-        throw new Error('Could not parse memory information');
+      if (isWindows) {
+        // Windows: Use PowerShell to get memory info
+        const { stdout } = await safeExecute('powershell', [
+          '-Command', 
+          'Get-CimInstance -ClassName Win32_OperatingSystem | Select-Object @{Name="TotalMemoryGB";Expression={[math]::Round($_.TotalVisibleMemorySize/1024/1024,2)}}, @{Name="FreeMemoryGB";Expression={[math]::Round($_.FreePhysicalMemory/1024/1024,2)}}'
+        ]);
+        
+        const lines = stdout.split('\n').filter(line => line.trim());
+        const dataLine = lines.find(line => line.includes('.') && !line.includes('Expression'));
+        
+        if (!dataLine) {
+          throw new Error('Could not parse memory information');
+        }
+        
+        // Parse the PowerShell output format: "    123.45        67.89"
+        const numbers = dataLine.trim().split(/\s+/).filter(part => part.match(/^\d+\.?\d*$/));
+        
+        if (numbers.length < 2) {
+          throw new Error('Could not extract memory values');
+        }
+        
+        const totalGB = Math.floor(parseFloat(numbers[0]));
+        const availableGB = Math.floor(parseFloat(numbers[1]));
+        
+        return {
+          total: totalGB,
+          available: availableGB,
+          required: requiredGB,
+          sufficient: availableGB >= requiredGB,
+          message: availableGB < requiredGB
+            ? `Insufficient memory. Need ${requiredGB}GB, have ${availableGB}GB available`
+            : `Memory OK: ${availableGB}GB available of ${totalGB}GB total (need ${requiredGB}GB)`
+        };
+      } else {
+        // Linux: Read memory info from /proc/meminfo
+        const meminfo = await fsPromises.readFile('/proc/meminfo', 'utf8');
+        
+        // Parse total and available memory
+        const totalMatch = meminfo.match(/MemTotal:\s+(\d+)\s+kB/);
+        const availableMatch = meminfo.match(/MemAvailable:\s+(\d+)\s+kB/);
+        
+        if (!totalMatch || !availableMatch) {
+          throw new Error('Could not parse memory information');
+        }
+        
+        const totalKB = parseInt(totalMatch[1]);
+        const availableKB = parseInt(availableMatch[1]);
+        
+        // Convert to GB
+        const totalGB = Math.floor(totalKB / 1024 / 1024);
+        const availableGB = Math.floor(availableKB / 1024 / 1024);
+        
+        return {
+          total: totalGB,
+          available: availableGB,
+          required: requiredGB,
+          sufficient: availableGB >= requiredGB,
+          message: availableGB < requiredGB
+            ? `Insufficient memory. Need ${requiredGB}GB, have ${availableGB}GB available`
+            : `Memory OK: ${availableGB}GB available of ${totalGB}GB total (need ${requiredGB}GB)`
+        };
       }
-      
-      const totalKB = parseInt(totalMatch[1]);
-      const availableKB = parseInt(availableMatch[1]);
-      
-      // Convert to GB
-      const totalGB = Math.floor(totalKB / 1024 / 1024);
-      const availableGB = Math.floor(availableKB / 1024 / 1024);
-      
-      return {
-        total: totalGB,
-        available: availableGB,
-        required: requiredGB,
-        sufficient: availableGB >= requiredGB,
-        message: availableGB < requiredGB
-          ? `Insufficient memory. Need ${requiredGB}GB, have ${availableGB}GB available`
-          : `Memory OK: ${availableGB}GB available of ${totalGB}GB total (need ${requiredGB}GB)`
-      };
     } catch (error) {
       return {
         total: 0,

@@ -53,7 +53,19 @@ app.use(globalInputSanitizer());
 
 // Apply rate limiting
 const { apiLimiter, deployLimiter, sensitiveLimiter } = security.getRateLimiters();
-app.use('/api/', apiLimiter);
+
+// Apply rate limiting but exclude health check and other critical endpoints
+app.use('/api/', (req, res, next) => {
+    // Exempt critical endpoints from rate limiting to prevent refresh loops
+    const exemptPaths = ['/api/health', '/api/preflight', '/api/csrf-token'];
+    
+    if (exemptPaths.includes(req.path)) {
+        return next();
+    }
+    
+    return apiLimiter(req, res, next);
+});
+
 app.use('/api/deploy', deployLimiter);
 app.use('/api/build', deployLimiter);
 app.use('/api/validate', sensitiveLimiter);
@@ -73,19 +85,55 @@ if (fs.existsSync(reactBuildPath)) {
     console.log(`React build not found at: ${reactBuildPath}`);
 }
 
-// Apply authentication (but not to static assets)
+// Apply authentication (but not to static assets and public endpoints)
 app.use((req, res, next) => {
-    // Skip authentication for static assets
-    if (req.path.startsWith('/assets/') || req.path === '/favicon.ico') {
+    // Skip authentication for static assets and public endpoints
+    const publicPaths = [
+        '/assets/',
+        '/favicon.ico',
+        '/api/preflight',
+        '/api/health',
+        '/api/csrf-token'
+    ];
+    
+    if (publicPaths.some(path => req.path.startsWith(path) || req.path === path)) {
         return next();
     }
     return security.requireToken()(req, res, next);
 });
 
-// Apply CSRF protection
+// Apply CSRF protection (but not to static assets and public endpoints)
 const csrf = security.csrfProtection();
-app.use(csrf.generate);
-app.use(csrf.validate);
+app.use((req, res, next) => {
+    // Skip CSRF for static assets and public endpoints
+    const publicPaths = [
+        '/assets/',
+        '/favicon.ico',
+        '/api/preflight',
+        '/api/health',
+        '/api/csrf-token'
+    ];
+    
+    if (publicPaths.some(path => req.path.startsWith(path) || req.path === path)) {
+        return next();
+    }
+    return csrf.generate(req, res, next);
+});
+app.use((req, res, next) => {
+    // Skip CSRF for static assets and public endpoints
+    const publicPaths = [
+        '/assets/',
+        '/favicon.ico',
+        '/api/preflight',
+        '/api/health',
+        '/api/csrf-token'
+    ];
+    
+    if (publicPaths.some(path => req.path.startsWith(path) || req.path === path)) {
+        return next();
+    }
+    return csrf.validate(req, res, next);
+});
 
 // Add CSRF token endpoint
 app.get('/api/csrf-token', (req, res) => {
@@ -2184,7 +2232,12 @@ app.get('/', (req, res) => {
   const validation = security.validateToken(token);
   
   if (!validation.valid) {
-    // Serve welcome page if no valid token
+    // If token was provided but invalid, redirect with error
+    if (token && token !== '') {
+      return res.redirect('/?error=' + encodeURIComponent(validation.error || 'Invalid token'));
+    }
+    
+    // Serve welcome page if no token provided
     const welcomePath = path.join(__dirname, 'welcome.html');
     if (fs.existsSync(welcomePath)) {
       return res.sendFile(welcomePath);

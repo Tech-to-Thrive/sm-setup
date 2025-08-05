@@ -1900,70 +1900,72 @@ function Show-WizardAccessInfo {
     }
     
     Write-Host ""
-    Write-Host "========================================" -ForegroundColor Green
-    Write-Host "   Stack Masters Provisioning Wizard" -ForegroundColor Green
-    Write-Host "========================================" -ForegroundColor Green
+    Write-Host "✅ Wizard started successfully!" -ForegroundColor Green
     Write-Host ""
-    Write-Host "✅ Wizard is running successfully!" -ForegroundColor Green
+    
+    # Save wizard info (using $scriptDir which is script-scoped)
+    $runDir = Join-Path $scriptDir "run"
+    $wizardDir = Join-Path $runDir "provisioning-wizard"
+    
+    # Ensure directory exists
+    if (-not (Test-Path $wizardDir)) {
+        New-Item -Path $wizardDir -ItemType Directory -Force | Out-Null
+    }
+    
+    $wizardInfoFile = Join-Path $wizardDir "wizard-info.txt"
+    @"
+Wizard URL: http://localhost:58217/?token=$tokenInfo
+Token: $tokenInfo
+Started: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+"@ | Set-Content -Path $wizardInfoFile -Force
+    
+    Write-Info "Wizard information saved to: $wizardInfoFile"
+    Write-Host ""
+    
+    # Clear the screen and show only the critical info at the bottom
+    Write-Host ""
+    Write-Host ""
+    Write-Host "========================================" -ForegroundColor Cyan
+    Write-Host "        NEXT STEP - OPEN YOUR BROWSER" -ForegroundColor Cyan  
+    Write-Host "========================================" -ForegroundColor Cyan
     Write-Host ""
     
     if ($tokenInfo) {
-        Write-Host "🔐 Security Token Required" -ForegroundColor Yellow
+        Write-Host "Open this URL in your browser:" -ForegroundColor White
         Write-Host ""
-        Write-Host "Access the wizard at:" -ForegroundColor Cyan
-        Write-Host "  🌐 http://localhost:58217/?token=$tokenInfo" -ForegroundColor Yellow
-    }
-    else {
-        Write-Host "Access the wizard at:" -ForegroundColor Cyan
-        Write-Host "  🌐 http://localhost:58217" -ForegroundColor Yellow
-    }
-    
-    if ($HostBinding -ne "localhost") {
-        # Show network interfaces for remote access
-        try {
-            $networkAdapters = Get-NetIPAddress -AddressFamily IPv4 | Where-Object { 
-                $_.IPAddress -ne "127.0.0.1" -and 
-                ($_.PrefixOrigin -eq "Dhcp" -or $_.PrefixOrigin -eq "Manual") 
-            }
-            if ($networkAdapters) {
-                Write-Host ""
-                Write-Host "Remote access URLs:" -ForegroundColor Cyan
-                foreach ($adapter in $networkAdapters) {
-                    if ($tokenInfo) {
-                        Write-Host "  🌐 http://$($adapter.IPAddress):58217/?token=$tokenInfo" -ForegroundColor Yellow
-                    }
-                    else {
-                        Write-Host "  🌐 http://$($adapter.IPAddress):58217" -ForegroundColor Yellow
+        Write-Host "  http://localhost:58217/?token=$tokenInfo" -ForegroundColor Yellow -BackgroundColor DarkBlue
+        Write-Host ""
+        Write-Host "⚠️  SECURITY WARNING:" -ForegroundColor Red
+        Write-Host "    This token expires in 30 minutes!" -ForegroundColor Red
+        Write-Host "    Complete setup promptly or restart this script for a new token." -ForegroundColor Red
+        
+        if ($HostBinding -ne "localhost") {
+            Write-Host ""
+            Write-Host "Remote access (if needed):" -ForegroundColor Gray
+            try {
+                $networkAdapters = Get-NetIPAddress -AddressFamily IPv4 | Where-Object { 
+                    $_.IPAddress -ne "127.0.0.1" -and 
+                    ($_.PrefixOrigin -eq "Dhcp" -or $_.PrefixOrigin -eq "Manual") 
+                }
+                if ($networkAdapters) {
+                    foreach ($adapter in $networkAdapters) {
+                        Write-Host "  http://$($adapter.IPAddress):58217/?token=$tokenInfo" -ForegroundColor Gray
                     }
                 }
             }
-        }
-        catch {
-            # Fallback if network detection fails
-            Write-Host ""
-            Write-Host "Remote access:" -ForegroundColor Cyan
-            if ($tokenInfo) {
-                Write-Host "  🌐 http://YOUR-SERVER-IP:58217/?token=$tokenInfo" -ForegroundColor Yellow
-            }
-            else {
-                Write-Host "  🌐 http://YOUR-SERVER-IP:58217" -ForegroundColor Yellow
+            catch {
+                Write-Host "  http://YOUR-SERVER-IP:58217/?token=$tokenInfo" -ForegroundColor Gray
             }
         }
     }
+    else {
+        Write-Host "Open this URL in your browser:" -ForegroundColor White
+        Write-Host ""
+        Write-Host "  http://localhost:58217" -ForegroundColor Yellow -BackgroundColor DarkBlue
+    }
     
     Write-Host ""
-    Write-Host "The wizard will guide you through:" -ForegroundColor Cyan
-    Write-Host "  📋 System validation and requirements check" -ForegroundColor White
-    Write-Host "  🔐 GitHub authentication and repository selection" -ForegroundColor White
-    Write-Host "  ⚙️  Environment configuration" -ForegroundColor White
-    Write-Host "  🚀 Service deployment and health monitoring" -ForegroundColor White
-    Write-Host ""
-    Write-Host "💡 Keep this terminal window open while using the wizard" -ForegroundColor Yellow
-    Write-Host ""
-    Write-Host "ℹ️  To restart the wizard, simply run this script again:" -ForegroundColor Cyan
-    Write-Host "  .\setup-windows.ps1" -ForegroundColor White
-    Write-Host ""
-    Write-Host "✨ The wizard will auto-shutdown 10 minutes after deployment completes" -ForegroundColor Green
+    Write-Host "========================================" -ForegroundColor Cyan
     Write-Host ""
 }
 
@@ -2070,28 +2072,8 @@ function Main {
     try {
         Start-ProvisioningWizard -WizardDir $wizardDir
         
-        # Only show success messages if wizard started successfully
+        # Keep output minimal - Show-WizardAccessInfo already shows the important info
         Write-Host ""
-        Write-Host "================================================"
-        Write-Success "Stack Masters initial setup completed!"
-        Write-Host "================================================"
-        Write-Host ""
-        Write-Info "The Stack Masters Provisioning Wizard is now running"
-        Write-Info "Use the web interface to complete your stack deployment"
-        Write-Host ""
-        Write-Info "Next steps:"
-        Write-Host "  1. Open the provisioning wizard in your browser"
-        Write-Host "  2. Select your stack configuration"
-        Write-Host "  3. Follow the guided setup process"
-        Write-Host ""
-        Write-Info "The wizard will handle:"
-        Write-Host "  - GitHub authentication"
-        Write-Host "  - Repository selection and cloning"
-        Write-Host "  - Environment configuration"
-        Write-Host "  - Service deployment"
-        Write-Host "  - SSL certificate setup"
-        Write-Host ""
-        Write-Info "Log file saved to: $script:LogFile"
     }
     catch {
         Write-Host ""

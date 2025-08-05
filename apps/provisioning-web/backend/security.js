@@ -5,7 +5,7 @@ const helmet = require('helmet');
 class ProvisioningSecurity {
   constructor() {
     this.setupToken = process.env.SETUP_TOKEN || this.generateSetupToken();
-    this.tokenExpiry = Date.now() + (60 * 60 * 1000); // 1 hour
+    this.tokenExpiry = Date.now() + (30 * 60 * 1000); // 30 minutes
     this.startTime = Date.now();
     this.lastActivity = Date.now();
     
@@ -31,7 +31,7 @@ class ProvisioningSecurity {
     console.log('║' + this.centerText('Access your server at:', boxWidth) + '║');
     console.log('║' + this.centerText(`http://YOUR-SERVER-IP/?token=${this.setupToken}`, boxWidth) + '║');
     console.log('║' + ' '.repeat(boxWidth) + '║');
-    console.log('║' + this.centerText('Token expires in 60 minutes', boxWidth) + '║');
+    console.log('║' + this.centerText('Token expires in 30 minutes', boxWidth) + '║');
     console.log('║' + this.centerText(`Expires at: ${new Date(this.tokenExpiry).toLocaleString()}`, boxWidth) + '║');
     console.log('╚' + separator + '╝');
     console.log('\n');
@@ -95,7 +95,7 @@ class ProvisioningSecurity {
           httpOnly: true,
           secure: process.env.NODE_ENV === 'production',
           sameSite: 'strict',
-          maxAge: 60 * 60 * 1000 // 1 hour
+          maxAge: 30 * 60 * 1000 // 30 minutes
         });
       }
       
@@ -113,7 +113,7 @@ class ProvisioningSecurity {
             httpOnly: false, // Must be readable by JS
             secure: process.env.NODE_ENV === 'production',
             sameSite: 'strict',
-            maxAge: 60 * 60 * 1000
+            maxAge: 30 * 60 * 1000
           });
           req.csrfToken = token;
         } else {

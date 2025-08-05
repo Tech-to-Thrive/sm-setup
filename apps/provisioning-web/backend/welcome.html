@@ -83,10 +83,9 @@
         <input type="password" 
                id="token" 
                class="token-input" 
-               placeholder="Enter setup token"
-               onkeypress="if(event.key === 'Enter') startSetup()">
+               placeholder="Enter setup token">
         
-        <button class="button" onclick="startSetup()">Start Setup</button>
+        <button class="button" id="startButton">Start Setup</button>
         
         <div id="error" class="error"></div>
         
@@ -96,35 +95,59 @@
     </div>
 
     <script>
-        function startSetup() {
-            const token = document.getElementById('token').value;
+        document.addEventListener('DOMContentLoaded', function() {
+            const tokenInput = document.getElementById('token');
+            const startButton = document.getElementById('startButton');
             const errorDiv = document.getElementById('error');
             
-            if (!token) {
-                errorDiv.textContent = 'Please enter a setup token';
+            // Check for error in URL parameters
+            const urlParams = new URLSearchParams(window.location.search);
+            const errorMessage = urlParams.get('error');
+            
+            if (errorMessage) {
+                errorDiv.textContent = errorMessage;
                 errorDiv.style.display = 'block';
-                return;
+                
+                // Clean up URL to remove error parameter
+                window.history.replaceState({}, document.title, window.location.pathname);
             }
             
-            // Validate token format (64 hex characters for 32 bytes)
-            if (!/^[a-f0-9]{64}$/.test(token)) {
-                errorDiv.textContent = 'Invalid token format (must be 64 characters)';
-                errorDiv.style.display = 'block';
-                return;
+            function startSetup() {
+                const token = tokenInput.value;
+                
+                if (!token) {
+                    errorDiv.textContent = 'Please enter a setup token';
+                    errorDiv.style.display = 'block';
+                    return;
+                }
+                
+                // Validate token format (64 hex characters for 32 bytes)
+                if (!/^[a-f0-9]{64}$/.test(token)) {
+                    errorDiv.textContent = 'Invalid token format (must be 64 characters)';
+                    errorDiv.style.display = 'block';
+                    return;
+                }
+                
+                // Redirect with token
+                window.location.href = '/?token=' + token;
             }
             
-            // Redirect with token
-            window.location.href = `/?token=${token}`;
-        }
-        
-        // Check if already authenticated
-        fetch('/api/health', { credentials: 'include' })
-            .then(res => {
-                if (res.ok) {
-                    // Already authenticated, redirect to main UI
-                    window.location.href = '/';
+            // Add event listeners
+            startButton.addEventListener('click', startSetup);
+            tokenInput.addEventListener('keypress', function(event) {
+                if (event.key === 'Enter') {
+                    startSetup();
                 }
             });
+            
+            // Clear error when user starts typing
+            tokenInput.addEventListener('input', function() {
+                errorDiv.style.display = 'none';
+            });
+            
+            // No automatic redirect to prevent infinite loops
+            // Users must manually enter token when it expires
+        });
     </script>
 </body>
 </html>
