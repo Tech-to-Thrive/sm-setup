@@ -461,11 +461,10 @@ configure_firewall() {
 
 # Configure firewall for server deployment
 configure_server_firewall() {
-    # Open all required ports for server deployment
+    # Only configure ports actually used by Stack Masters
+    # Removed ports 80 and 443 - not needed by Stack Masters
     PORTS=(
-        "80:tcp"      # HTTP (Nginx proxy)
-        "443:tcp"     # HTTPS (Nginx proxy)
-        "58217:tcp"    # Alternative HTTP port
+        "58217:tcp"   # Provisioning wizard
         "3000:tcp"    # Grafana
         "3001:tcp"    # Stack Manager UI
         "3002:tcp"    # Stack Manager API
@@ -666,21 +665,30 @@ validate_system_requirements() {
     
     local validation_errors=0
     
-    # Check disk space (minimum 20GB)
+    # Check disk space (minimum 10GB - sufficient for Docker images and data)
     log_info "Checking disk space..."
-    AVAILABLE_SPACE=$(df -BG /opt 2>/dev/null | tail -1 | awk '{print $4}' | sed 's/G//')
-    if [ -z "$AVAILABLE_SPACE" ] || [ "$AVAILABLE_SPACE" -lt 20 ]; then
-        log_error "Insufficient disk space: ${AVAILABLE_SPACE:-0}GB available, 20GB required"
+    AVAILABLE_SPACE=$(df -BG / 2>/dev/null | tail -1 | awk '{print $4}' | sed 's/G//')
+    TOTAL_SPACE=$(df -BG / 2>/dev/null | tail -1 | awk '{print $2}' | sed 's/G//')
+    
+    if [ -z "$AVAILABLE_SPACE" ] || [ "$AVAILABLE_SPACE" -lt 10 ]; then
+        log_error "Insufficient disk space: ${AVAILABLE_SPACE:-0}GB available, 10GB required"
         ((validation_errors++))
+    elif [ "$AVAILABLE_SPACE" -lt 15 ]; then
+        log_warning "Low disk space: ${AVAILABLE_SPACE}GB available. Consider having at least 15GB for optimal performance."
+        log_success "Disk space: ${AVAILABLE_SPACE}GB available (minimum requirement met) ✓"
     else
-        log_success "Disk space: ${AVAILABLE_SPACE}GB available ✓"
+        log_success "Disk space: ${AVAILABLE_SPACE}GB available of ${TOTAL_SPACE}GB total ✓"
     fi
     
     # Check memory (minimum 4GB)
     log_info "Checking system memory..."
-    TOTAL_MEM=$(free -g | awk '/^Mem:/{print $2}')
-    AVAILABLE_MEM=$(free -g | awk '/^Mem:/{print $7}')
-    if [ "$TOTAL_MEM" -lt 4 ]; then
+    # Get memory in MB first for accuracy, then convert to GB
+    TOTAL_MEM_MB=$(free -m | awk '/^Mem:/{print $2}')
+    AVAILABLE_MEM_MB=$(free -m | awk '/^Mem:/{print $7}')
+    TOTAL_MEM=$(echo "scale=1; $TOTAL_MEM_MB / 1024" | bc 2>/dev/null || echo "$((TOTAL_MEM_MB / 1024))")
+    AVAILABLE_MEM=$(echo "scale=1; $AVAILABLE_MEM_MB / 1024" | bc 2>/dev/null || echo "$((AVAILABLE_MEM_MB / 1024))")
+    
+    if [ "$TOTAL_MEM_MB" -lt 4096 ]; then
         log_error "Insufficient memory: ${TOTAL_MEM}GB total, 4GB required"
         ((validation_errors++))
     else
@@ -780,8 +788,9 @@ validate_system_requirements() {
         log_success "Port 58217 available for wizard ✓"
     fi
     
-    # Check other critical ports (warnings only)
-    local WARNING_PORTS=(80 443 3000 5678 9090)
+    # Check other ports used by Stack Masters services (warnings only)
+    # Removed ports 80 and 443 - not needed by Stack Masters
+    local WARNING_PORTS=(3000 3001 5678 9090)
     for port in "${WARNING_PORTS[@]}"; do
         if ! check_port_availability $port "Stack Services" 2>/dev/null; then
             log_warning "Port $port is in use. This may cause conflicts during deployment."
@@ -865,79 +874,280 @@ setup_provisioning_wizard() {
     log_success "Provisioning wizard files updated successfully"
 }
 
-# Stop any existing wizard processes
+# Stop any existing wizard processes (aggressive cleanup like PowerShell)
 stop_existing_wizard() {
     log_info "Checking for existing wizard processes..."
     
     local cleanup_performed=false
     
-    # Method 1: Check for processes on port 58217
+    # Method 1: Kill ALL processes on port 58217 (our unique wizard port)
+    log_info "Checking port 58217..."
     if command -v lsof >/dev/null 2>&1; then
         local pids=$(lsof -ti:58217 2>/dev/null)
         if [ -n "$pids" ]; then
-            log_warning "Found process using port 58217. Cleaning up..."
+            log_warning "Found $(echo "$pids" | wc -w) process(es) using port 58217. Force stopping all..."
             for pid in $pids; do
-                log_info "Stopping process PID: $pid"
-                kill -TERM "$pid" 2>/dev/null || true
+                log_info "Force stopping process on port 58217 (PID: $pid)..."
+                kill -KILL "$pid" 2>/dev/null || kill -9 "$pid" 2>/dev/null || true
                 cleanup_performed=true
             done
-            sleep 2
+            sleep 3
+        fi
+    elif command -v ss >/dev/null 2>&1; then
+        # Fallback to ss command
+        local pids=$(ss -tlnp 2>/dev/null | grep ":58217" | grep -oP 'pid=\K\d+' || true)
+        if [ -n "$pids" ]; then
+            log_warning "Found process using port 58217. Force stopping..."
+            for pid in $pids; do
+                log_info "Force stopping process on port 58217 (PID: $pid)..."
+                kill -KILL "$pid" 2>/dev/null || kill -9 "$pid" 2>/dev/null || true
+                cleanup_performed=true
+            done
+            sleep 3
         fi
     elif command -v netstat >/dev/null 2>&1; then
+        # Last resort - netstat
         local pids=$(netstat -tlnp 2>/dev/null | grep ":58217" | awk '{print $7}' | cut -d'/' -f1)
         if [ -n "$pids" ]; then
-            log_warning "Found process using port 58217. Cleaning up..."
+            log_warning "Found process using port 58217. Force stopping..."
             for pid in $pids; do
-                if [ -n "$pid" ]; then
-                    log_info "Stopping process PID: $pid"
-                    kill -TERM "$pid" 2>/dev/null || true
+                if [ -n "$pid" ] && [ "$pid" != "-" ]; then
+                    log_info "Force stopping process on port 58217 (PID: $pid)..."
+                    kill -KILL "$pid" 2>/dev/null || kill -9 "$pid" 2>/dev/null || true
                     cleanup_performed=true
                 fi
             done
-            sleep 2
+            sleep 3
         fi
     fi
     
-    # Method 2: Check for PID file
-    local pid_file="$SCRIPT_DIR/run/provisioning-wizard/wizard.pid"
-    if [ -f "$pid_file" ]; then
-        local pid=$(cat "$pid_file" 2>/dev/null)
-        if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-            log_info "Stopping wizard process from PID file (PID: $pid)"
-            kill -TERM "$pid" 2>/dev/null || true
-            cleanup_performed=true
-            sleep 2
-        fi
-        rm -f "$pid_file"
-    fi
+    # Method 2: Check for PID files
+    local pid_files=(
+        "$SCRIPT_DIR/run/provisioning-wizard/wizard.pid"
+        "$SCRIPT_DIR/run/provisioning-wizard/backend/wizard.pid"
+    )
     
-    # Method 3: Find node processes in wizard directory
-    if command -v pgrep >/dev/null 2>&1; then
-        local node_pids=$(pgrep -f "node.*server-integrated.js" 2>/dev/null || true)
-        if [ -n "$node_pids" ]; then
-            for pid in $node_pids; do
-                log_info "Stopping node process in wizard directory (PID: $pid)"
-                kill -TERM "$pid" 2>/dev/null || true
+    for pid_file in "${pid_files[@]}"; do
+        if [ -f "$pid_file" ]; then
+            local pid=$(cat "$pid_file" 2>/dev/null)
+            if [ -n "$pid" ]; then
+                log_info "Found PID file. Force stopping process (PID: $pid)..."
+                kill -KILL "$pid" 2>/dev/null || kill -9 "$pid" 2>/dev/null || true
                 cleanup_performed=true
-            done
-            sleep 2
+            fi
+            rm -f "$pid_file"
+        fi
+    done
+    
+    # Method 3: Kill ALL node processes that might be ours
+    log_info "Checking for Node.js processes..."
+    local node_pids=""
+    
+    # Try multiple methods to find node processes
+    if command -v pgrep >/dev/null 2>&1; then
+        node_pids=$(pgrep -f "node.*provisioning-wizard" 2>/dev/null || true)
+        node_pids="$node_pids $(pgrep -f "node.*server-integrated.js" 2>/dev/null || true)"
+    fi
+    
+    if command -v ps >/dev/null 2>&1; then
+        # Also check with ps for any missed processes
+        local ps_pids=$(ps aux | grep -E "node.*(provisioning-wizard|server-integrated)" | grep -v grep | awk '{print $2}' || true)
+        node_pids="$node_pids $ps_pids"
+    fi
+    
+    # Remove duplicates and empty entries
+    node_pids=$(echo "$node_pids" | tr ' ' '\n' | sort -u | grep -v '^$' || true)
+    
+    if [ -n "$node_pids" ]; then
+        local count=$(echo "$node_pids" | wc -w)
+        log_warning "Found $count Node.js process(es). Checking which are wizard processes..."
+        
+        for pid in $node_pids; do
+            if [ -n "$pid" ]; then
+                # Check if process still exists
+                if kill -0 "$pid" 2>/dev/null; then
+                    log_info "Force stopping wizard Node.js process (PID: $pid)..."
+                    kill -KILL "$pid" 2>/dev/null || kill -9 "$pid" 2>/dev/null || true
+                    cleanup_performed=true
+                fi
+            fi
+        done
+    fi
+    
+    # Method 4: Clean up any processes that have our wizard directory open
+    if command -v lsof >/dev/null 2>&1; then
+        local wizard_dir="$SCRIPT_DIR/run/provisioning-wizard"
+        if [ -d "$wizard_dir" ]; then
+            log_info "Checking for processes locking wizard directory..."
+            local dir_pids=$(lsof +D "$wizard_dir" 2>/dev/null | awk 'NR>1 {print $2}' | sort -u || true)
+            if [ -n "$dir_pids" ]; then
+                for pid in $dir_pids; do
+                    # Get process name
+                    local pname=$(ps -p "$pid" -o comm= 2>/dev/null || echo "unknown")
+                    if [[ "$pname" == *"node"* ]]; then
+                        log_info "Force stopping process with wizard directory open: $pname (PID: $pid)..."
+                        kill -KILL "$pid" 2>/dev/null || kill -9 "$pid" 2>/dev/null || true
+                        cleanup_performed=true
+                    fi
+                done
+            fi
         fi
     fi
     
     if [ "$cleanup_performed" = true ]; then
-        log_success "Cleanup completed. Waiting for processes to fully terminate..."
-        sleep 3
+        log_success "Aggressive cleanup completed. Waiting for processes to fully terminate..."
+        sleep 5  # Give more time for processes to die
         
-        # Verify port is now free
+        # Double-check port is free
+        local port_still_used=false
         if command -v lsof >/dev/null 2>&1; then
-            if ! lsof -ti:58217 >/dev/null 2>&1; then
-                log_success "Port 58217 is now available ✓"
-            else
-                log_warning "Port 58217 may still be in use. The wizard will attempt to start anyway."
+            if lsof -ti:58217 >/dev/null 2>&1; then
+                port_still_used=true
             fi
+        elif command -v ss >/dev/null 2>&1; then
+            if ss -tlnp 2>/dev/null | grep -q ":58217"; then
+                port_still_used=true
+            fi
+        fi
+        
+        if [ "$port_still_used" = true ]; then
+            log_warning "Port 58217 is STILL in use. Attempting final cleanup..."
+            # Last resort - kill anything on port 58217
+            if command -v fuser >/dev/null 2>&1; then
+                fuser -k 58217/tcp 2>/dev/null || true
+            fi
+            sleep 2
+        else
+            log_success "Port 58217 is now available ✓"
         fi
     else
         log_success "No existing wizard processes found ✓"
+    fi
+    
+    # Final cleanup - remove any stale PID files
+    rm -f "$SCRIPT_DIR/run/provisioning-wizard/wizard.pid" 2>/dev/null || true
+    rm -f "$SCRIPT_DIR/run/provisioning-wizard/backend/wizard.pid" 2>/dev/null || true
+}
+
+# Run wizard-specific diagnostics
+test_wizard_diagnostics() {
+    log_info "Running wizard pre-flight diagnostics..."
+    
+    local issues=()
+    local warnings=()
+    
+    # Check Node.js
+    if ! command -v node >/dev/null 2>&1; then
+        issues+=("Node.js is not installed or not in PATH")
+    else
+        local node_version=$(node --version 2>&1)
+        log_success "Node.js installed: $node_version"
+        # Check if version is at least v16
+        if [[ "$node_version" =~ v([0-9]+)\. ]]; then
+            local major_version="${BASH_REMATCH[1]}"
+            if [ "$major_version" -lt 16 ]; then
+                warnings+=("Node.js version $node_version is below recommended v16+")
+            fi
+        fi
+    fi
+    
+    # Check npm
+    if ! command -v npm >/dev/null 2>&1; then
+        issues+=("npm is not installed or not in PATH")
+    else
+        local npm_version=$(npm --version 2>&1)
+        log_success "npm installed: $npm_version"
+    fi
+    
+    # Check port 58217 with detailed information
+    log_info "Checking port 58217 availability..."
+    local port_in_use=false
+    local process_info=""
+    
+    if command -v lsof >/dev/null 2>&1; then
+        local port_check=$(lsof -i:58217 2>/dev/null)
+        if [ -n "$port_check" ]; then
+            port_in_use=true
+            local pid=$(echo "$port_check" | awk 'NR==2 {print $2}')
+            local pname=$(ps -p "$pid" -o comm= 2>/dev/null || echo "unknown")
+            process_info="Process using port: $pname (PID: $pid)"
+        fi
+    elif command -v ss >/dev/null 2>&1; then
+        if ss -tlnp 2>/dev/null | grep -q ":58217"; then
+            port_in_use=true
+            process_info="Port 58217 is in use (use 'ss -tlnp | grep :58217' to see details)"
+        fi
+    elif command -v netstat >/dev/null 2>&1; then
+        if netstat -tlnp 2>/dev/null | grep -q ":58217"; then
+            port_in_use=true
+            process_info="Port 58217 is in use (use 'netstat -tlnp | grep :58217' to see details)"
+        fi
+    fi
+    
+    if [ "$port_in_use" = true ]; then
+        issues+=("Port 58217 is already in use!")
+        if [ -n "$process_info" ]; then
+            issues+=("  $process_info")
+        fi
+        log_info "Please stop the process using port 58217 or choose a different port"
+    else
+        log_success "Port 58217 is available"
+    fi
+    
+    # Check firewall rules (for server environments)
+    if [ "$OS_TYPE" = "server" ]; then
+        if command -v ufw >/dev/null 2>&1; then
+            if ufw status 2>/dev/null | grep -q "58217"; then
+                log_success "Firewall rule found for port 58217"
+            else
+                warnings+=("No firewall rule found for port 58217 on server OS")
+            fi
+        elif command -v firewall-cmd >/dev/null 2>&1; then
+            if firewall-cmd --list-ports 2>/dev/null | grep -q "58217"; then
+                log_success "Firewall rule found for port 58217"
+            else
+                warnings+=("No firewall rule found for port 58217 on server OS")
+            fi
+        fi
+    fi
+    
+    # Check available memory
+    local available_mem_mb=$(free -m | awk '/^Mem:/{print $7}')
+    local available_mem_gb=$(echo "scale=1; $available_mem_mb / 1024" | bc 2>/dev/null || echo "$((available_mem_mb / 1024))")
+    if [ "$available_mem_mb" -lt 1024 ]; then
+        warnings+=("Low available memory: ${available_mem_gb}GB (recommend 1GB+)")
+    fi
+    
+    # Check disk space in temp directory
+    local temp_disk=$(df -BG /tmp 2>/dev/null | tail -1 | awk '{print $4}' | sed 's/G//')
+    if [ -n "$temp_disk" ] && [ "$temp_disk" -lt 2 ]; then
+        issues+=("Low disk space on /tmp: ${temp_disk}GB (need 2GB+)")
+    fi
+    
+    # Report results
+    if [ ${#issues[@]} -gt 0 ]; then
+        log_error "Critical issues found:"
+        for issue in "${issues[@]}"; do
+            echo -e "  ${RED}• $issue${NC}"
+        done
+    fi
+    
+    if [ ${#warnings[@]} -gt 0 ]; then
+        log_warning "Potential issues found:"
+        for warning in "${warnings[@]}"; do
+            echo -e "  ${YELLOW}• $warning${NC}"
+        done
+    fi
+    
+    if [ ${#issues[@]} -eq 0 ] && [ ${#warnings[@]} -eq 0 ]; then
+        log_success "No issues detected"
+    fi
+    
+    # Return status
+    if [ ${#issues[@]} -gt 0 ]; then
+        return 1  # Has critical issues
+    else
+        return 0  # OK to proceed (warnings are acceptable)
     fi
 }
 
@@ -953,14 +1163,107 @@ start_provisioning_wizard() {
         exit 1
     fi
     
+    # Check if Node.js is available
+    if ! command -v node >/dev/null 2>&1; then
+        log_info "Node.js not found. Installing Node.js..."
+        
+        # Install Node.js based on package manager
+        case $PKG_MANAGER in
+            apt)
+                curl -fsSL https://deb.nodesource.com/setup_lts.x | bash -
+                apt-get install -y nodejs
+                ;;
+            yum|dnf)
+                curl -fsSL https://rpm.nodesource.com/setup_lts.x | bash -
+                $PKG_INSTALL nodejs
+                ;;
+            pacman)
+                pacman -S nodejs npm --noconfirm
+                ;;
+            zypper)
+                zypper install -y nodejs npm
+                ;;
+        esac
+        
+        if ! command -v node >/dev/null 2>&1; then
+            log_error "Failed to install Node.js"
+            exit 1
+        fi
+        
+        log_success "Node.js installed successfully"
+    fi
+    
+    # Validate Node.js installation
+    log_info "Validating Node.js installation..."
+    node_version=$(node --version 2>&1)
+    log_info "Node.js version: $node_version"
+    
+    # Check if npm is available
+    if ! command -v npm >/dev/null 2>&1; then
+        log_error "npm is not available. Please ensure Node.js installation includes npm."
+        exit 1
+    fi
+    
+    # Validate npm
+    npm_version=$(npm --version 2>&1)
+    log_info "npm version: $npm_version"
+    
     # Install dependencies
     log_info "Installing dependencies..."
     cd "$BACKEND_DIR"
     
-    if ! npm install --production >/dev/null 2>&1; then
-        log_error "npm install failed"
-        exit 1
+    # Simple direct approach - just run npm install
+    log_info "Running npm install (this may take a minute)..."
+    
+    npm_install_success=false
+    npm_install_output=""
+    
+    # Method 1: Direct invocation with output capture
+    if npm_install_output=$(npm install --production 2>&1); then
+        npm_install_success=true
+        log_success "npm install completed successfully"
+    else
+        log_warning "Direct npm invocation failed, trying alternative method..."
+        
+        # Method 2: Try with different flags
+        if npm_install_output=$(npm install --production --no-audit --no-fund 2>&1); then
+            npm_install_success=true
+            log_success "npm install completed successfully (alternative method)"
+        else
+            # Method 3: Try cleaning cache first
+            log_warning "Trying with cache clean..."
+            npm cache clean --force >/dev/null 2>&1 || true
+            
+            if npm_install_output=$(npm install --production 2>&1); then
+                npm_install_success=true
+                log_success "npm install completed successfully (after cache clean)"
+            fi
+        fi
     fi
+    
+    # Check if npm install succeeded
+    if [ "$npm_install_success" = false ]; then
+        log_error "Automated npm install failed"
+        log_error "npm output: $npm_install_output"
+        echo ""
+        echo -e "${RED}Manual installation required:${NC}"
+        echo -e "${YELLOW}Please run the following commands manually:${NC}"
+        echo -e "  ${BLUE}cd \"$BACKEND_DIR\"${NC}"
+        echo -e "  ${BLUE}npm install --production${NC}"
+        echo ""
+        echo -e "${YELLOW}Press any key after manual installation completes...${NC}"
+        read -n 1 -s
+        echo ""
+        
+        # Verify node_modules exists
+        if [ ! -d "$BACKEND_DIR/node_modules" ]; then
+            log_error "node_modules directory not found. Please ensure npm install completed successfully."
+            exit 1
+        fi
+        log_success "Continuing with manual npm install"
+    fi
+    
+    log_success "Dependencies installed successfully"
     
     # Determine host binding based on environment
     if [ "$OS_TYPE" = "server" ]; then
@@ -985,17 +1288,97 @@ start_provisioning_wizard() {
     echo "$WIZARD_PID" > "$WIZARD_DIR/wizard.pid"
     log_info "Provisioning wizard started with PID: $WIZARD_PID"
     
-    # Wait for server to be ready
-    log_info "Waiting for server to be ready..."
-    sleep 8
+    # Monitor startup for errors (first 10 seconds)
+    log_info "Monitoring startup for errors..."
+    startup_timeout=10
+    startup_start=$(date +%s)
+    process_started=false
+    has_errors=false
     
-    # Test if server is accessible
-    if curl -s "http://$HOST_BINDING:58217" >/dev/null 2>&1; then
+    while [ $(($(date +%s) - startup_start)) -lt $startup_timeout ]; do
+        # Check if process is still running
+        if ! kill -0 "$WIZARD_PID" 2>/dev/null; then
+            log_error "Node.js process exited unexpectedly"
+            
+            # Try to read output from log file for error details
+            if [ -f "$LOGS_DIR/wizard-$WIZARD_LOG_TIMESTAMP.log" ]; then
+                error_output=$(tail -n 20 "$LOGS_DIR/wizard-$WIZARD_LOG_TIMESTAMP.log" 2>/dev/null || true)
+                if [ -n "$error_output" ]; then
+                    log_error "Process error output:"
+                    echo "$error_output"
+                fi
+            fi
+            
+            has_errors=true
+            break
+        fi
+        
+        # Check if server is responding - try multiple endpoints
+        # Try root endpoint (health endpoint requires auth)
+        if curl -s -m 2 "http://$HOST_BINDING:58217/" >/dev/null 2>&1; then
+            process_started=true
+            break
+        fi
+        
+        # Also check the specific HTTP response codes
+        http_code=$(curl -s -o /dev/null -w "%{http_code}" -m 2 "http://$HOST_BINDING:58217/" 2>/dev/null || echo "000")
+        # 401 Unauthorized or 403 Forbidden means server is running but requires auth - that's fine!
+        if [ "$http_code" = "401" ] || [ "$http_code" = "403" ]; then
+            process_started=true
+            log_success "Server is responding (authentication required)"
+            break
+        fi
+        
+        # Also try the health endpoint
+        health_code=$(curl -s -o /dev/null -w "%{http_code}" -m 2 "http://$HOST_BINDING:58217/api/health" 2>/dev/null || echo "000")
+        if [ "$health_code" = "200" ] || [ "$health_code" = "401" ] || [ "$health_code" = "403" ]; then
+            process_started=true
+            log_success "Server is responding (health endpoint accessible)"
+            break
+        fi
+        
+        sleep 0.5
+    done
+    
+    # Determine startup result
+    if [ "$has_errors" = true ]; then
+        log_error "❌ FAILED TO START PROVISIONING WIZARD"
+        log_error "Node.js process failed to start properly"
+        echo ""
+        echo -e "${RED}Troubleshooting steps:${NC}"
+        echo -e "  1. Check the log files in: ${YELLOW}$LOGS_DIR${NC}"
+        echo -e "  2. Verify Node.js and npm are working: ${YELLOW}node --version && npm --version${NC}"
+        echo -e "  3. Check if port 58217 is available: ${YELLOW}lsof -i:58217${NC}"
+        echo -e "  4. Try running the wizard manually:"
+        echo -e "     ${BLUE}cd \"$BACKEND_DIR\"${NC}"
+        echo -e "     ${BLUE}npm install${NC}"
+        echo -e "     ${BLUE}HOST=$HOST_BINDING PORT=58217 NODE_ENV=production node server-integrated.js${NC}"
+        echo ""
+        echo -e "${RED}Setup failed - wizard is not running${NC}"
+        exit 1
+    elif [ "$process_started" = true ]; then
+        log_success "Provisioning wizard started successfully!"
         # Silently proceed to show wizard info
         show_wizard_access_info "$HOST_BINDING"
     else
-        log_warning "Server may still be starting up. Check manually if needed."
-        show_wizard_access_info "$HOST_BINDING"
+        # Process is running but not responding
+        log_warning "Node.js process is running but server is not responding on port 58217"
+        log_warning "This usually indicates a configuration or dependency issue"
+        
+        # Try to get some output from the log
+        if [ -f "$LOGS_DIR/wizard-$WIZARD_LOG_TIMESTAMP.log" ]; then
+            log_info "Recent log output:"
+            tail -n 20 "$LOGS_DIR/wizard-$WIZARD_LOG_TIMESTAMP.log" 2>/dev/null || true
+        fi
+        
+        # Kill the non-responsive process
+        log_info "Terminating non-responsive process..."
+        kill -TERM "$WIZARD_PID" 2>/dev/null || true
+        sleep 2
+        kill -KILL "$WIZARD_PID" 2>/dev/null || true
+        
+        log_error "Server failed to start - check logs for details"
+        exit 1
     fi
     
     cd "$SCRIPT_DIR"
@@ -1010,13 +1393,22 @@ show_wizard_access_info() {
     local wizard_log=$(ls -t "$LOGS_DIR"/wizard-*.log 2>/dev/null | head -1)
     
     if [ -n "$wizard_log" ] && [ -f "$wizard_log" ]; then
-        # Extract token from log
+        # Extract token from log - try multiple patterns
         token_info=$(grep -oP 'Token:\s*\K[a-f0-9]{64}' "$wizard_log" 2>/dev/null || true)
+        if [ -z "$token_info" ]; then
+            # Try alternative pattern
+            token_info=$(grep -oP 'token=\K[a-f0-9]{64}' "$wizard_log" 2>/dev/null || true)
+        fi
     fi
     
-    # Save wizard info
-    mkdir -p "$SCRIPT_DIR/run/provisioning-wizard"
-    local wizard_info_file="$SCRIPT_DIR/run/provisioning-wizard/wizard-info.txt"
+    # Save wizard info silently
+    local run_dir="$SCRIPT_DIR/run"
+    local wizard_dir="$run_dir/provisioning-wizard"
+    
+    # Ensure directory exists
+    mkdir -p "$wizard_dir"
+    
+    local wizard_info_file="$wizard_dir/wizard-info.txt"
     {
         echo "Wizard URL: http://localhost:58217/?token=$token_info"
         echo "Token: $token_info"
@@ -1027,9 +1419,9 @@ show_wizard_access_info() {
     echo ""
     echo ""
     echo ""
-    echo "========================================"
-    echo "        NEXT STEP - OPEN YOUR BROWSER"
-    echo "========================================"
+    echo -e "${BLUE}========================================${NC}"
+    echo -e "${BLUE}        NEXT STEP - OPEN YOUR BROWSER${NC}"
+    echo -e "${BLUE}========================================${NC}"
     echo ""
     
     if [ -n "$token_info" ]; then
@@ -1041,19 +1433,28 @@ show_wizard_access_info() {
         
         if [ "$host_binding" != "localhost" ]; then
             echo ""
-            echo "Remote access (if needed):"
+            echo -e "${GRAY:-}Remote access (if needed):${NC}"
             # Show network interfaces for remote access
             if command -v ip >/dev/null 2>&1; then
                 ip -4 addr show | grep inet | grep -v 127.0.0.1 | awk '{print $2}' | cut -d/ -f1 | while read -r ip; do
-                    echo "  http://$ip:58217/?token=$token_info"
+                    echo -e "${GRAY:-}  http://$ip:58217/?token=$token_info${NC}"
                 done
             elif command -v hostname >/dev/null 2>&1; then
-                local_ip=$(hostname -I | awk '{print $1}')
-                if [ -n "$local_ip" ]; then
-                    echo "  http://$local_ip:58217/?token=$token_info"
+                # Try multiple methods to get IP
+                local_ips=$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -v '^$' || true)
+                if [ -z "$local_ips" ]; then
+                    # Alternative method
+                    local_ips=$(ip route get 1 2>/dev/null | awk '{print $7}' || true)
+                fi
+                if [ -n "$local_ips" ]; then
+                    for ip in $local_ips; do
+                        echo -e "${GRAY:-}  http://$ip:58217/?token=$token_info${NC}"
+                    done
+                else
+                    echo -e "${GRAY:-}  http://YOUR-SERVER-IP:58217/?token=$token_info${NC}"
                 fi
             else
-                echo "  http://YOUR-SERVER-IP:58217/?token=$token_info"
+                echo -e "${GRAY:-}  http://YOUR-SERVER-IP:58217/?token=$token_info${NC}"
             fi
         fi
     else
@@ -1063,7 +1464,7 @@ show_wizard_access_info() {
     fi
     
     echo ""
-    echo "========================================"
+    echo -e "${BLUE}========================================${NC}"
     echo ""
 }
 
@@ -1083,22 +1484,7 @@ main() {
     log_info "Starting Stack Masters setup..."
     log_info "Detected OS: $OS_NAME"
     log_info "OS Type: $OS_TYPE"
-    echo ""
-    
-    # Display what this script will do
-    echo -e "${YELLOW}This script will:${NC}"
-    echo -e "${YELLOW}  1. Check your system for required packages${NC}"
-    echo -e "${YELLOW}  2. Install missing packages (with your permission)${NC}"
-    if [ "$OS_TYPE" = "server" ]; then
-        echo -e "${YELLOW}  3. Configure firewall (Server OS detected)${NC}"
-    else
-        echo -e "${YELLOW}  3. Skip firewall configuration (Desktop OS detected)${NC}"
-    fi
-    echo -e "${YELLOW}  4. Authenticate with GitHub${NC}"
-    echo -e "${YELLOW}  5. Clone the Stack Masters repository${NC}"
-    echo ""
-    echo -e "${BLUE}Press any key to continue...${NC}"
-    read -n 1 -s
+    log_info "Log file: $LOGFILE"
     echo ""
     
     # Check system packages
@@ -1141,7 +1527,17 @@ main() {
     echo ""
     stop_existing_wizard
     
+    # Run wizard-specific diagnostics
+    echo ""
+    if ! test_wizard_diagnostics; then
+        log_error "Critical issues detected that will prevent the wizard from starting"
+        log_info "Please resolve the issues above and try again"
+        exit 1
+    fi
+    
     # Setup and start provisioning wizard
+    echo ""
+    log_info "All checks passed - setting up provisioning wizard..."
     setup_provisioning_wizard
     start_provisioning_wizard
     
