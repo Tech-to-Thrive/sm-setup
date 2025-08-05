@@ -1,95 +1,83 @@
 #!/bin/bash
-# Build script for pre-compiling the React frontend
-# This script should be run before committing to ensure the dist folder is included
+# Stack Masters Frontend Build Script for Linux/Mac
+# Handles Node.js v23 compatibility issues automatically
 
-set -e
-
-echo "================================================"
-echo "Stack Masters Provisioning Wizard Frontend Build"
-echo "================================================"
+echo "========================================"
+echo "Stack Masters Frontend Build (Linux/Mac)"
+echo "========================================"
 echo ""
 
-# Change to frontend directory
+# Get Node.js version
+NODE_VERSION=$(node --version 2>&1)
+echo "Node.js version: $NODE_VERSION"
+
+# Check if we're on Node.js v23
+IS_NODE_V23=false
+if [[ "$NODE_VERSION" == *"v23."* ]]; then
+    IS_NODE_V23=true
+    echo "Detected Node.js v23 - Using compatibility mode"
+fi
+
+# Navigate to frontend directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FRONTEND_DIR="$SCRIPT_DIR/frontend"
 
 if [ ! -d "$FRONTEND_DIR" ]; then
-    echo "ERROR: Frontend directory not found at $FRONTEND_DIR"
+    echo "[ERROR] Frontend directory not found: $FRONTEND_DIR"
     exit 1
 fi
 
 cd "$FRONTEND_DIR"
 
-# Check if Node.js is installed
-if ! command -v node &> /dev/null; then
-    echo "ERROR: Node.js is not installed"
-    echo "Please install Node.js 18+ to build the frontend"
-    exit 1
+# Clean install if needed
+if [ ! -d "node_modules" ]; then
+    echo "Installing dependencies..."
+    
+    if [ "$IS_NODE_V23" = true ]; then
+        echo "Using --legacy-peer-deps for Node.js v23 compatibility"
+        npm install --legacy-peer-deps
+    else
+        npm install
+    fi
+    
+    if [ $? -ne 0 ]; then
+        echo "[ERROR] Failed to install dependencies"
+        exit 1
+    fi
 fi
 
-# Check Node version and provide compatibility info
-NODE_VERSION=$(node -v | cut -d'v' -f2 | cut -d'.' -f1)
-if [ "$NODE_VERSION" -lt 18 ]; then
-    echo "ERROR: Node.js version 18+ is required (found: $(node -v))"
-    exit 1
-fi
+# Build the frontend
+echo ""
+echo "Building React frontend..."
 
-echo "✓ Node.js $(node -v) detected"
+npm run build
 
-# Provide Node.js v23 compatibility info
-if [ "$NODE_VERSION" -eq 23 ]; then
-    echo "ℹ️ Node.js v23 detected - using optimized configuration for compatibility"
-    echo "   • Rollup WASM fallback enabled"
-    echo "   • Tailwind CSS v3 configuration active"
-fi
-
-# Check if pnpm is installed (as specified in package.json)
-if command -v pnpm &> /dev/null; then
-    echo "✓ pnpm detected, using pnpm"
-    PKG_MANAGER="pnpm"
-elif command -v npm &> /dev/null; then
-    echo "✓ npm detected, using npm"
-    PKG_MANAGER="npm"
+if [ $? -eq 0 ]; then
+    echo ""
+    echo "[SUCCESS] Frontend built successfully!"
+    echo "Build output: $FRONTEND_DIR/dist"
+    
+    # Copy to backend if needed
+    BACKEND_DIST_DIR="$SCRIPT_DIR/backend/frontend/dist"
+    PARENT_DIR=$(dirname "$BACKEND_DIST_DIR")
+    
+    if [ ! -d "$PARENT_DIR" ]; then
+        mkdir -p "$PARENT_DIR"
+    fi
+    
+    echo "Copying build to backend directory..."
+    cp -r dist "$BACKEND_DIST_DIR"
+    echo "[SUCCESS] Frontend deployed to backend!"
 else
-    echo "ERROR: No package manager found (pnpm or npm required)"
+    echo ""
+    echo "[ERROR] Build failed!"
+    
+    if [ "$IS_NODE_V23" = true ]; then
+        echo ""
+        echo "Node.js v23 Compatibility Note:"
+        echo "The build uses @rollup/wasm-node for cross-platform compatibility."
+        echo "If issues persist, consider using Node.js v20 LTS."
+    fi
+    
     exit 1
 fi
-
-# Install dependencies with compatibility options
-echo ""
-echo "Installing dependencies..."
-if [ "$NODE_VERSION" -eq 23 ]; then
-    echo "Using --legacy-peer-deps for Node.js v23 compatibility"
-    $PKG_MANAGER install --legacy-peer-deps
-else
-    $PKG_MANAGER install
-fi
-
-# Run the build
-echo ""
-echo "Building production bundle..."
-$PKG_MANAGER run build
-
-# Check if build was successful
-if [ ! -d "dist" ]; then
-    echo "ERROR: Build failed - dist directory not created"
-    exit 1
-fi
-
-# Show build results
-echo ""
-echo "✅ Build completed successfully!"
-echo ""
-echo "Build output:"
-du -sh dist/
-echo ""
-ls -la dist/
-
-echo ""
-echo "================================================"
-echo "IMPORTANT: The dist/ folder has been created."
-echo "Make sure to:"
-echo "1. Update frontend/.gitignore to NOT ignore dist/"
-echo "2. Commit the dist/ folder to the repository"
-echo "3. Test the production build locally"
-echo "================================================"

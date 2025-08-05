@@ -1,32 +1,12 @@
+# Dependencies
+node_modules/
+
 # Logs
-logs
-*.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
-
-# Dependency directories
-node_modules/
-.pnpm-store/
-
-# Environment files
-.env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
-
-# Cache directories
-.next/
-.nuxt/
-.cache/
-.parcel-cache/
-
-# Coverage directory used by tools like istanbul
-coverage/
-*.lcov
 
 # Editor directories and files
 .vscode/*
@@ -39,14 +19,6 @@ coverage/
 *.sln
 *.sw?
 
-# Temporary files
-*.tmp
-*.temp
-
-# OS generated files
-Thumbs.db
-ehthumbs.db
-
-# IMPORTANT: dist/ folder is NOT ignored
-# We want to commit the pre-built frontend for deployment
+# Allow dist folder to be committed
+# This provides a pre-built version for users
 # !dist/
