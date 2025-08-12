@@ -8,7 +8,7 @@ param(
 )
 
 # Script version
-$VERSION = "1.1.0"
+$VERSION = "1.2.0"
 
 # Script-level variables for executable paths
 $script:GitExePath = $null

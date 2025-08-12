@@ -9,7 +9,7 @@
 set -euo pipefail
 
 # Script version
-VERSION="1.1.0"
+VERSION="1.2.0"
 
 # Parse command line arguments
 SKIP_AUTH=false
@@ -203,25 +203,81 @@ install_core_deps() {
     # Distribution-specific adjustments
     case $PKG_MANAGER in
         brew)
-            # macOS with Homebrew - most are already included
-            CORE_PACKAGES="wget gnupg"
+            # macOS with Homebrew - add netcat and GNU coreutils
+            CORE_PACKAGES="wget gnupg netcat coreutils"
             ;;
         apt)
-            CORE_PACKAGES="$CORE_PACKAGES apt-transport-https lsb-release software-properties-common"
+            # Ubuntu/Debian - add netcat-openbsd (preferred) and ensure coreutils
+            CORE_PACKAGES="$CORE_PACKAGES apt-transport-https lsb-release software-properties-common netcat-openbsd coreutils"
             ;;
         yum|dnf)
-            CORE_PACKAGES="$CORE_PACKAGES yum-utils"
+            # CentOS/Red Hat - add nc (netcat equivalent) and coreutils
+            CORE_PACKAGES="$CORE_PACKAGES yum-utils nc coreutils"
             ;;
         pacman)
-            CORE_PACKAGES="$CORE_PACKAGES base-devel"
+            # Arch Linux - add gnu-netcat and coreutils
+            CORE_PACKAGES="$CORE_PACKAGES base-devel gnu-netcat coreutils"
             ;;
         zypper)
-            CORE_PACKAGES="$CORE_PACKAGES patterns-devel-base-devel_basis"
+            # SUSE - add netcat-openbsd and coreutils
+            CORE_PACKAGES="$CORE_PACKAGES patterns-devel-base-devel_basis netcat-openbsd coreutils"
             ;;
     esac
     
+    log_info "Installing packages: $CORE_PACKAGES"
     $PKG_INSTALL $CORE_PACKAGES
-    log_success "Core dependencies installed"
+    
+    # Validate critical network utilities are available
+    validate_network_utilities
+    
+    log_success "Core dependencies installed and validated"
+}
+
+# Validate network utilities installation
+validate_network_utilities() {
+    local missing_tools=()
+    
+    # Check for curl
+    if ! command -v curl &> /dev/null; then
+        missing_tools+=("curl")
+    fi
+    
+    # Check for netcat (various possible commands)
+    if ! command -v nc &> /dev/null && ! command -v netcat &> /dev/null && ! command -v ncat &> /dev/null; then
+        missing_tools+=("netcat")
+    fi
+    
+    # Check for timeout (part of coreutils)
+    if ! command -v timeout &> /dev/null; then
+        missing_tools+=("timeout")
+    fi
+    
+    if [ ${#missing_tools[@]} -gt 0 ]; then
+        log_warning "Some network utilities are not available: ${missing_tools[*]}"
+        log_info "Scripts will use fallback methods for port checking"
+        log_info "For optimal functionality, ensure these tools are installed:"
+        for tool in "${missing_tools[@]}"; do
+            case $tool in
+                netcat)
+                    case $PKG_MANAGER in
+                        apt) echo "  sudo apt-get install netcat-openbsd" ;;
+                        yum|dnf) echo "  sudo $PKG_MANAGER install nc" ;;
+                        zypper) echo "  sudo zypper install netcat-openbsd" ;;
+                        brew) echo "  brew install netcat" ;;
+                        pacman) echo "  sudo pacman -S gnu-netcat" ;;
+                    esac
+                    ;;
+                curl)
+                    echo "  sudo $PKG_MANAGER install curl"
+                    ;;
+                timeout)
+                    echo "  sudo $PKG_MANAGER install coreutils"
+                    ;;
+            esac
+        done
+    else
+        log_success "All network utilities are available"
+    fi
 }
 
 # Install Git
