@@ -425,6 +425,88 @@ get_repository_url() {
     echo "$url"
 }
 
+# Prompt user for clone directory selection
+prompt_clone_directory() {
+    # Use consistent location across all Unix-like systems
+    local default_dir="$HOME/stack-masters"
+    
+    echo ""
+    log_info "Repository Clone Location"
+    echo ""
+    echo "Where would you like to clone the repository?"
+    echo ""
+    echo -e "${YELLOW}Important:${NC} Choose a permanent location where you'll keep this for updates and patches."
+    echo -e "${BLUE}If unsure, use the recommended option (1).${NC}"
+    echo ""
+    echo "Repository name: $REPO_NAME"
+    echo "Current directory: $(pwd)"
+    echo ""
+    echo "Options:"
+    echo "  1. $default_dir (recommended)"
+    echo "  2. $(pwd) (current directory)" 
+    echo "  3. Custom path"
+    echo ""
+    
+    read -p "Enter choice [1-3] or custom path (default: 1): " choice
+    
+    case $choice in
+        1|"")
+            CLONE_BASE_DIR="$default_dir"
+            ;;
+        2)
+            CLONE_BASE_DIR="$(pwd)"
+            ;;
+        3)
+            read -p "Enter custom path: " custom_path
+            CLONE_BASE_DIR="$custom_path"
+            ;;
+        *)
+            # Treat anything else as a custom path
+            CLONE_BASE_DIR="$choice"
+            ;;
+    esac
+    
+    # Expand ~ to $HOME if present
+    CLONE_BASE_DIR="${CLONE_BASE_DIR/#\~/$HOME}"
+    
+    # Set final clone directory
+    CLONE_DIR="$CLONE_BASE_DIR/$REPO_NAME"
+    
+    # Validate and create parent directory
+    validate_and_create_directory "$CLONE_BASE_DIR"
+}
+
+# Validate and create directory if needed
+validate_and_create_directory() {
+    local dir="$1"
+    
+    # Check if directory exists and is writable, or if parent is writable
+    if [ -d "$dir" ]; then
+        if [ ! -w "$dir" ]; then
+            log_error "Directory $dir is not writable"
+            log_info "Please choose a different location or run with appropriate permissions"
+            exit 1
+        fi
+        log_info "Using existing directory: $dir"
+    else
+        # Check if parent directory exists and is writable
+        local parent_dir=$(dirname "$dir")
+        if [ ! -d "$parent_dir" ] || [ ! -w "$parent_dir" ]; then
+            log_error "Cannot create directory $dir - parent directory $parent_dir is not accessible"
+            log_info "Please choose a different location or check permissions"
+            exit 1
+        fi
+        
+        # Create the directory
+        if mkdir -p "$dir" 2>/dev/null; then
+            log_success "Created directory: $dir"
+        else
+            log_error "Failed to create directory: $dir"
+            exit 1
+        fi
+    fi
+}
+
 # Clone appropriate repository
 clone_repository() {
     local max_attempts=3
@@ -477,15 +559,8 @@ clone_repository() {
         fi
     done
     
-    # Set clone directory based on OS
-    if [[ "$OS" == "macos" ]]; then
-        # Use user's home directory for macOS
-        CLONE_DIR="$HOME/stack-masters/$REPO_NAME"
-        mkdir -p "$HOME/stack-masters"
-    else
-        # Use /opt for Linux
-        CLONE_DIR="/opt/$REPO_NAME"
-    fi
+    # Prompt user for clone directory
+    prompt_clone_directory
     
     # Handle existing directory
     if [ -d "$CLONE_DIR" ]; then
@@ -936,7 +1011,7 @@ main() {
             echo "     - Authenticate with GitHub"
         fi
     fi
-    echo "     - Clone repository to ./stack-masters/"
+    echo "     - Clone repository to your chosen directory"
     echo ""
     
     echo "  Final Steps:"

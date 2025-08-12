@@ -637,21 +637,105 @@ function Get-RepositoryUrl {
     return $url
 }
 
+function Prompt-CloneDirectory {
+    param([string]$RepoName)
+    
+    # Use consistent location in user profile
+    $defaultDir = Join-Path $env:USERPROFILE "stack-masters"
+    $currentDir = Get-Location
+    
+    Write-Host ""
+    Write-Info "Repository Clone Location"
+    Write-Host ""
+    Write-Host "Where would you like to clone the repository?"
+    Write-Host ""
+    Write-Host "Important: Choose a permanent location where you'll keep this for updates and patches." -ForegroundColor Yellow
+    Write-Host "If unsure, use the recommended option (1)." -ForegroundColor Blue
+    Write-Host ""
+    Write-Host "Repository name: $RepoName" -ForegroundColor Cyan
+    Write-Host "Current directory: $currentDir"
+    Write-Host ""
+    Write-Host "Options:"
+    Write-Host "  1. $defaultDir (recommended)"
+    Write-Host "  2. $currentDir (current directory)"
+    Write-Host "  3. Custom path"
+    Write-Host ""
+    
+    $choice = Read-Host "Enter choice [1-3] or custom path (default: 1)"
+    
+    $cloneBaseDir = switch ($choice) {
+        { $_ -eq "1" -or [string]::IsNullOrEmpty($_) } { $defaultDir }
+        "2" { $currentDir }
+        "3" { 
+            $customPath = Read-Host "Enter custom path"
+            $customPath
+        }
+        default { $choice }
+    }
+    
+    # Expand environment variables and resolve path
+    $cloneBaseDir = [System.Environment]::ExpandEnvironmentVariables($cloneBaseDir)
+    $cloneBaseDir = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($cloneBaseDir)
+    
+    # Set final clone directory
+    $cloneDir = Join-Path $cloneBaseDir $RepoName
+    
+    # Validate and create parent directory
+    Validate-AndCreateDirectory -Directory $cloneBaseDir
+    
+    return $cloneDir
+}
+
+function Validate-AndCreateDirectory {
+    param([string]$Directory)
+    
+    try {
+        if (Test-Path $Directory) {
+            # Check if directory is writable
+            $testFile = Join-Path $Directory "test_write_permissions.tmp"
+            try {
+                [System.IO.File]::WriteAllText($testFile, "test")
+                Remove-Item $testFile -Force
+                Write-Info "Using existing directory: $Directory"
+            }
+            catch {
+                Write-Error-Custom "Directory $Directory is not writable"
+                Write-Info "Please choose a different location or check permissions"
+                exit 1
+            }
+        }
+        else {
+            # Check if parent directory exists and is writable
+            $parentDir = Split-Path $Directory -Parent
+            if (-not (Test-Path $parentDir)) {
+                Write-Error-Custom "Parent directory $parentDir does not exist"
+                Write-Info "Please choose a different location"
+                exit 1
+            }
+            
+            # Try to create the directory
+            New-Item -ItemType Directory -Path $Directory -Force | Out-Null
+            Write-Success "Created directory: $Directory"
+        }
+    }
+    catch {
+        Write-Error-Custom "Failed to create or access directory: $Directory"
+        Write-Info "Error: $($_.Exception.Message)"
+        exit 1
+    }
+}
+
 function Clone-Repository {
     $repoUrl = Get-RepositoryUrl
     
-    # Clone to stack-masters subdirectory in current location
-    # Use $PSScriptRoot if available, otherwise use current directory
-    if ($PSScriptRoot) {
-        $ScriptPath = $PSScriptRoot
-    } elseif ($script:MyInvocation.MyCommand.Path) {
-        $ScriptPath = Split-Path -Parent $script:MyInvocation.MyCommand.Path
-    } else {
-        $ScriptPath = Get-Location
-    }
-    $cloneDir = Join-Path $ScriptPath "stack-masters"
+    # Extract repository name from URL
+    $repoName = [System.IO.Path]::GetFileNameWithoutExtension((Split-Path $repoUrl -Leaf))
     
     Write-Info "Repository: $repoUrl"
+    
+    # Prompt user for clone directory
+    $cloneDir = Prompt-CloneDirectory -RepoName $repoName
+    
     Write-Info "Clone directory: $cloneDir"
     
     # Check if user has access to the repository
@@ -933,7 +1017,7 @@ function Main {
             Write-Host "     - Authenticate with GitHub"
         }
     }
-    Write-Host "     - Clone repository to .\stack-masters\"
+    Write-Host "     - Clone repository to your chosen directory"
     Write-Host ""
     
     Write-Host "  Final Steps:"
