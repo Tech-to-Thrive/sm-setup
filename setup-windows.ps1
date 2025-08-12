@@ -1,5 +1,5 @@
-# Stack Masters Windows Server Setup Script
-# PowerShell script for preparing Windows Server for containerized Stack Masters deployment
+# Stack Masters Windows Setup Script
+# PowerShell script for preparing Windows for Stack Masters deployment
 
 param(
     [string]$RepoUrl = "",
@@ -8,7 +8,7 @@ param(
 )
 
 # Script version
-$VERSION = "1.0.0"
+$VERSION = "1.1.0"
 
 # Script-level variables for executable paths
 $script:GitExePath = $null
@@ -104,7 +104,7 @@ try {
 
 function Show-Help {
     Write-Host @"
-Stack Masters Windows Server Setup Script v$VERSION
+Stack Masters Windows Setup Script v$VERSION
 
 USAGE:
     .\setup-windows.ps1 [OPTIONS]
@@ -583,11 +583,7 @@ function Authenticate-GitHub {
     Write-Host "  - To verify you have proper access permissions"
     Write-Host ""
     
-    # Always use device code authentication for better security
-    $isServerEnvironment = $false
-    
-    if ($isServerEnvironment) {
-        Write-Info "Server environment detected - using device code authentication"
+    # Use device code authentication
         Write-Host ""
         Write-Host "==========================================" -ForegroundColor Yellow
         Write-Info "GITHUB AUTHENTICATION REQUIRED"
@@ -860,8 +856,7 @@ function Test-Installation {
 function Main {
     Clear-Host
     
-    # Setup type is always localhost
-    $setupType = "Local Development Setup"
+    $setupType = "Stack Masters Setup"
     
     Write-Host "================================================"
     Write-Host "   Stack Masters Windows Setup Script v$VERSION"
@@ -874,8 +869,6 @@ function Main {
         return
     }
     
-    # Setup is always for localhost
-    $deploymentModeText = "Local Development"
     
     # Check what's already installed
     Write-Host ""
@@ -943,7 +936,6 @@ function Main {
     
     Write-Host "This script will perform the following:" -ForegroundColor Cyan
     Write-Host ""
-    Write-Host "  MODE: Local Development (localhost only)" -ForegroundColor Yellow
     Write-Host ""
     
     if ($needsInstall.Count -gt 0) {
@@ -958,7 +950,7 @@ function Main {
     }
     
     Write-Host "  System Configuration:"
-    Write-Host "     - Local development environment (localhost only)"
+    Write-Host "     - Prepare Windows environment for Stack Masters"
     Write-Host ""
     
     Write-Host "  GitHub Setup:"
@@ -1003,7 +995,7 @@ function Main {
     Install-GitHubCLI
     Install-Docker
     
-    # No firewall configuration needed for localhost
+    # System preparation complete
     
     # Check if Docker needs a restart before continuing
     $dockerNeedsRestart = $false

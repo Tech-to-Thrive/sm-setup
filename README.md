@@ -1,6 +1,6 @@
 # Stack Masters Setup
 
-One-command setup for Stack Masters on any server or local machine.
+One-command setup for Stack Masters deployment.
 
 ## Quick Start
 
@@ -24,7 +24,7 @@ Set-ExecutionPolicy Bypass -Scope Process -Force; [System.Net.ServicePointManage
 
 ## What This Does
 
-1. **Detects your system** - Works on Ubuntu, Debian, CentOS, Rocky Linux, macOS, Windows Server, Windows 11
+1. **Detects your system** - Works on Ubuntu, Debian, CentOS, Red Hat, SUSE, macOS, Windows 11, Windows Server 2022/2025
 2. **Installs requirements** - Git, Docker, GitHub CLI (using winget on Windows, Homebrew on macOS)
 3. **Authenticates GitHub** - Secure device code flow
 4. **Clones your repository** - You'll select from Skool community repos or provide custom URL

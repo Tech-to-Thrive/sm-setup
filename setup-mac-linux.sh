@@ -9,28 +9,14 @@
 set -euo pipefail
 
 # Script version
-VERSION="1.0.0"
+VERSION="1.1.0"
 
 # Parse command line arguments
-DEPLOYMENT_MODE=""
-SKIP_FIREWALL=false
 SKIP_AUTH=false
 REPO_URL=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --server)
-            DEPLOYMENT_MODE="1"
-            shift
-            ;;
-        --local|--development)
-            DEPLOYMENT_MODE="2"
-            shift
-            ;;
-        --skip-firewall)
-            SKIP_FIREWALL=true
-            shift
-            ;;
         --skip-auth)
             SKIP_AUTH=true
             shift
@@ -47,18 +33,13 @@ while [[ $# -gt 0 ]]; do
             echo "IMPORTANT: Always run WITHOUT sudo. The script will auto-elevate on Linux."
             echo ""
             echo "Options:"
-            echo "  --server          Server deployment mode (configure firewall)"
-            echo "  --local           Local development mode (skip firewall)"
-            echo "  --development     Same as --local"
-            echo "  --skip-firewall   Skip firewall configuration entirely"
             echo "  --skip-auth       Skip GitHub authentication (for testing)"
             echo "  --repo-url URL    GitHub repository URL to clone"
             echo "  --help            Show this help message"
             echo ""
             echo "Examples:"
-            echo "  $0                # Interactive mode (default)"
-            echo "  $0 --server       # Server deployment, no prompts"
-            echo "  $0 --local        # Local development, no prompts"
+            echo "  $0                # Interactive setup"
+            echo "  $0 --repo-url https://github.com/org/repo"
             echo ""
             echo "The script automatically detects your OS and:"
             echo "  - macOS: Runs without sudo (Homebrew doesn't need root)"
@@ -349,100 +330,6 @@ install_docker() {
     log_success "Docker installed and started successfully"
 }
 
-# Configure firewall rules
-configure_firewall() {
-    # Skip firewall configuration for macOS
-    if [[ "$OS" == "macos" ]]; then
-        log_info "macOS detected - skipping firewall configuration"
-        log_info "macOS firewall can be configured in System Preferences if needed"
-        return
-    fi
-    
-    if [ "$SKIP_FIREWALL" = true ]; then
-        log_info "Skipping firewall configuration (--skip-firewall flag)"
-        return
-    fi
-    
-    # Use command line argument if provided, otherwise prompt
-    if [ -z "$DEPLOYMENT_MODE" ]; then
-        log_info "Deployment Mode Selection"
-        echo ""
-        echo "Please select your deployment type:"
-        echo "1) Server deployment (VPS/Cloud) - Configure firewall with required ports"
-        echo "2) Local development (Mac/Windows/Linux) - Skip firewall configuration"
-        echo ""
-        read -p "Select mode [1-2] (default: 1): " DEPLOYMENT_MODE
-        
-        # Default to server mode if no input
-        DEPLOYMENT_MODE=${DEPLOYMENT_MODE:-1}
-    fi
-    
-    case $DEPLOYMENT_MODE in
-        1)
-            log_info "Server deployment mode selected - configuring firewall..."
-            configure_server_firewall
-            ;;
-        2)
-            log_info "Local development mode selected - skipping firewall configuration"
-            log_info "Assuming local firewall/router handles port access"
-            return
-            ;;
-        *)
-            log_error "Invalid selection. Defaulting to server deployment mode."
-            configure_server_firewall
-            ;;
-    esac
-}
-
-# Configure firewall for server deployment
-configure_server_firewall() {
-    # Open all required ports for server deployment
-    PORTS=(
-        "80:tcp"      # HTTP (Nginx proxy)
-        "443:tcp"     # HTTPS (Nginx proxy)
-        "8080:tcp"    # Alternative HTTP port
-        "3000:tcp"    # Grafana
-        "3001:tcp"    # Stack Manager UI
-        "3002:tcp"    # Stack Manager API
-        "5678:tcp"    # n8n
-        "9090:tcp"    # Prometheus
-        "9999:tcp"    # Auth proxy
-        "587:tcp"     # SMTP Submission (secure outbound email)
-        "465:tcp"     # SMTPS (secure outbound email SSL/TLS)
-    )
-    
-    log_info "Opening ports for Stack Masters services and web access"
-    
-    # Detect firewall
-    if command -v ufw &> /dev/null; then
-        log_info "Configuring UFW firewall..."
-        ufw --force enable
-        for port in "${PORTS[@]}"; do
-            port_num=$(echo $port | cut -d: -f1)
-            proto=$(echo $port | cut -d: -f2)
-            ufw allow $port_num/$proto
-            log_info "Allowed port $port_num/$proto"
-        done
-        # Allow SSH if not already allowed
-        ufw allow 22/tcp
-        ufw reload
-    elif command -v firewall-cmd &> /dev/null; then
-        log_info "Configuring firewalld..."
-        systemctl start firewalld
-        systemctl enable firewalld
-        for port in "${PORTS[@]}"; do
-            firewall-cmd --permanent --add-port=$port
-            log_info "Allowed port $port"
-        done
-        # Allow SSH
-        firewall-cmd --permanent --add-service=ssh
-        firewall-cmd --reload
-    else
-        log_warning "No firewall detected. Please manually configure firewall rules for ports: ${PORTS[*]}"
-    fi
-    
-    log_success "Firewall configuration complete"
-}
 
 # GitHub authentication
 github_auth() {
@@ -467,9 +354,9 @@ github_auth() {
     echo ""
     log_info "GitHub authentication required for repository access"
     
-    # Detect server environment (SSH, no display, or --server flag)
-    if [[ -n "${SSH_CONNECTION:-}" ]] || [[ -z "${DISPLAY:-}" ]] || [[ "$DEPLOYMENT_MODE" == "1" ]]; then
-        log_info "Server environment detected - using device code authentication"
+    # Detect remote environment (SSH or no display)
+    if [[ -n "${SSH_CONNECTION:-}" ]] || [[ -z "${DISPLAY:-}" ]]; then
+        log_info "Remote environment detected - using device code authentication"
         echo ""
         echo "=========================================="
         log_info "GITHUB AUTHENTICATION REQUIRED"
@@ -964,8 +851,7 @@ show_summary() {
 main() {
     clear
     
-    # Setup type is always localhost
-    local setup_type="Local Development Setup"
+    local setup_type="Stack Masters Setup"
     
     echo "=============================================="
     echo "   Stack Masters Setup Script v${VERSION}"
@@ -1028,9 +914,6 @@ main() {
     
     echo -e "${BLUE}This script will perform the following:${NC}"
     echo ""
-    deployment_text="Local Development (default)"
-    [ "$DEPLOYMENT_MODE" = "1" ] && deployment_text="Server Deployment"
-    echo -e "  ${YELLOW}DEPLOYMENT MODE: $deployment_text${NC}"
     echo ""
     
     if [ ${#needs_install[@]} -gt 0 ]; then
@@ -1045,11 +928,7 @@ main() {
     fi
     
     echo "  System Configuration:"
-    if [ "$DEPLOYMENT_MODE" = "1" ]; then
-        echo "     - Configure firewall (ports: 80, 443, 8080, etc.)"
-    else
-        echo "     - Skip firewall configuration (Local mode)"
-    fi
+    echo "     - Prepare system environment for Stack Masters"
     echo ""
     
     echo "  GitHub Setup:"
@@ -1091,8 +970,7 @@ main() {
     install_github_cli
     install_docker
     
-    # Configure system
-    configure_firewall
+    # System preparation complete
     
     # GitHub authentication and repository setup
     github_auth
