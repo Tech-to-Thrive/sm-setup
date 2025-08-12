@@ -964,12 +964,8 @@ show_summary() {
 main() {
     clear
     
-    # Determine deployment mode for title
+    # Setup type is always localhost
     local setup_type="Local Development Setup"
-    if [ "$DEPLOYMENT_MODE" = "1" ] || [[ "${1:-}" == "--server" ]]; then
-        setup_type="Server Deployment"
-        DEPLOYMENT_MODE="1"
-    fi
     
     echo "=============================================="
     echo "   Stack Masters Setup Script v${VERSION}"

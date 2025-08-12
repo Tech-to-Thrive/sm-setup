@@ -3,11 +3,7 @@
 
 param(
     [string]$RepoUrl = "",
-    [switch]$SkipFirewall = $false,
     [switch]$SkipAuth = $false,
-    [switch]$Server = $false,
-    [switch]$Local = $false,
-    [switch]$Development = $false,
     [switch]$Help = $false
 )
 
@@ -115,20 +111,18 @@ USAGE:
 
 OPTIONS:
     -RepoUrl <string>     GitHub repository URL to clone
-    -SkipFirewall        Skip Windows Firewall configuration
     -SkipAuth            Skip GitHub authentication (for testing)
     -Help                Show this help message
 
 EXAMPLES:
     .\setup-windows.ps1
     .\setup-windows.ps1 -RepoUrl "https://github.com/Tech-to-Thrive/stack-masters"
-    .\setup-windows.ps1 -SkipFirewall -SkipAuth
+    .\setup-windows.ps1 -SkipAuth
 
 This script will install (using winget):
 - Git for Windows
 - Docker Desktop
 - GitHub CLI
-- Configure Windows Firewall (if server mode)
 - Clone the specified repository
 "@
 }
@@ -554,65 +548,6 @@ function Install-Docker {
     }
 }
 
-function Configure-Firewall {
-    if ($SkipFirewall) {
-        Write-Info "Skipping firewall configuration"
-        return
-    }
-    
-    # Determine deployment mode from parameters
-    $deploymentMode = ""
-    if ($Server) {
-        $deploymentMode = "1"
-    } elseif ($Local -or $Development) {
-        $deploymentMode = "2"
-    }
-    
-    # Default to Local mode if no parameter specified
-    if ([string]::IsNullOrEmpty($deploymentMode)) {
-        Write-Info "No deployment mode specified - defaulting to Local development mode"
-        $deploymentMode = "2"
-    }
-    
-    switch ($deploymentMode) {
-        "1" {
-            Write-Info "Server deployment mode selected - configuring firewall..."
-            Configure-ServerFirewall
-        }
-        "2" {
-            Write-Info "Local development mode selected - skipping firewall configuration"
-            Write-Info "Assuming local firewall/router handles port access"
-            return
-        }
-        default {
-            Write-Warning "Invalid selection. Defaulting to server deployment mode."
-            Configure-ServerFirewall
-        }
-    }
-}
-
-function Configure-ServerFirewall {
-    Write-Info "Configuring Windows Firewall for server deployment..."
-    
-    $ports = @(80, 443, 8080, 3000, 3001, 3002, 5678, 9090, 9999, 587, 465)
-    
-    foreach ($port in $ports) {
-        try {
-            # Inbound rules
-            New-NetFirewallRule -DisplayName "Stack Masters HTTP $port (Inbound)" -Direction Inbound -Protocol TCP -LocalPort $port -Action Allow -ErrorAction SilentlyContinue
-            
-            # Outbound rules
-            New-NetFirewallRule -DisplayName "Stack Masters HTTP $port (Outbound)" -Direction Outbound -Protocol TCP -LocalPort $port -Action Allow -ErrorAction SilentlyContinue
-            
-            Write-Info "Firewall rule added for port $port"
-        }
-        catch {
-            Write-Warning "Failed to add firewall rule for port ${port}: $_"
-        }
-    }
-    
-    Write-Success "Windows Firewall configured"
-}
 
 function Authenticate-GitHub {
     if ($SkipAuth) {
@@ -648,8 +583,8 @@ function Authenticate-GitHub {
     Write-Host "  - To verify you have proper access permissions"
     Write-Host ""
     
-    # Detect server environment (Windows Server or --Server flag)  
-    $isServerEnvironment = ($Server -or (Get-CimInstance Win32_OperatingSystem).ProductType -ne 1)
+    # Always use device code authentication for better security
+    $isServerEnvironment = $false
     
     if ($isServerEnvironment) {
         Write-Info "Server environment detected - using device code authentication"
@@ -925,11 +860,8 @@ function Test-Installation {
 function Main {
     Clear-Host
     
-    # Determine deployment mode for title
+    # Setup type is always localhost
     $setupType = "Local Development Setup"
-    if ($Server) {
-        $setupType = "Windows Server Preparation"
-    }
     
     Write-Host "================================================"
     Write-Host "   Stack Masters Windows Setup Script v$VERSION"
@@ -942,11 +874,8 @@ function Main {
         return
     }
     
-    # Determine deployment mode
-    $deploymentModeText = "Local Development (default)"
-    if ($Server) {
-        $deploymentModeText = "Server Deployment"
-    }
+    # Setup is always for localhost
+    $deploymentModeText = "Local Development"
     
     # Check what's already installed
     Write-Host ""
@@ -1014,7 +943,7 @@ function Main {
     
     Write-Host "This script will perform the following:" -ForegroundColor Cyan
     Write-Host ""
-    Write-Host "  DEPLOYMENT MODE: $deploymentModeText" -ForegroundColor Yellow
+    Write-Host "  MODE: Local Development (localhost only)" -ForegroundColor Yellow
     Write-Host ""
     
     if ($needsInstall.Count -gt 0) {
@@ -1029,11 +958,7 @@ function Main {
     }
     
     Write-Host "  System Configuration:"
-    if ($Server) {
-        Write-Host "     - Configure Windows Firewall (ports: 80, 443, 8080, etc.)"
-    } else {
-        Write-Host "     - Skip firewall configuration (Local mode)"
-    }
+    Write-Host "     - Local development environment (localhost only)"
     Write-Host ""
     
     Write-Host "  GitHub Setup:"
@@ -1078,8 +1003,7 @@ function Main {
     Install-GitHubCLI
     Install-Docker
     
-    # Configure system
-    Configure-Firewall
+    # No firewall configuration needed for localhost
     
     # Check if Docker needs a restart before continuing
     $dockerNeedsRestart = $false
