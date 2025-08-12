@@ -851,11 +851,8 @@ show_summary() {
 main() {
     clear
     
-    local setup_type="Stack Masters Setup"
-    
     echo "=============================================="
     echo "   Stack Masters Setup Script v${VERSION}"
-    echo "   $setup_type"
     echo "=============================================="
     echo ""
     

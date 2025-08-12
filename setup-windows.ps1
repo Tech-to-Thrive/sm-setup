@@ -584,51 +584,26 @@ function Authenticate-GitHub {
     Write-Host ""
     
     # Use device code authentication
-        Write-Host ""
-        Write-Host "==========================================" -ForegroundColor Yellow
-        Write-Info "GITHUB AUTHENTICATION REQUIRED"
-        Write-Host "==========================================" -ForegroundColor Yellow
-        Write-Host ""
-        Write-Info "1. GitHub will display a device code below"
-        Write-Info "2. Copy the device code"
-        Write-Info "3. Visit: https://github.com/login/device"
-        Write-Info "4. Paste the code and complete authentication"
-        Write-Host ""
-        Write-Host "Starting GitHub authentication..." -ForegroundColor Green
-        Write-Host ""
-        
-        try {
-            gh auth login
-            Write-Success "GitHub authentication successful"
-        }
-        catch {
-            Write-Error-Custom "GitHub authentication failed: $($_.Exception.Message)"
-            exit 1
-        }
+    Write-Host ""
+    Write-Host "==========================================" -ForegroundColor Yellow
+    Write-Info "GITHUB AUTHENTICATION REQUIRED"
+    Write-Host "==========================================" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Info "1. GitHub will display a device code below"
+    Write-Info "2. Copy the device code"
+    Write-Info "3. Visit: https://github.com/login/device"
+    Write-Info "4. Paste the code and complete authentication"
+    Write-Host ""
+    Write-Host "Starting GitHub authentication..." -ForegroundColor Green
+    Write-Host ""
+    
+    try {
+        gh auth login
+        Write-Success "GitHub authentication successful"
     }
-    else {
-        Write-Info "Desktop environment detected - using device code authentication"
-        Write-Host ""
-        Write-Host "==========================================" -ForegroundColor Yellow
-        Write-Info "GITHUB AUTHENTICATION REQUIRED"
-        Write-Host "==========================================" -ForegroundColor Yellow
-        Write-Host ""
-        Write-Info "1. GitHub will display a device code below"
-        Write-Info "2. Copy the device code" 
-        Write-Info "3. Open your browser and visit: https://github.com/login/device"
-        Write-Info "4. Paste the code and complete authentication"
-        Write-Host ""
-        Write-Host "Starting GitHub authentication..." -ForegroundColor Green
-        Write-Host ""
-        
-        try {
-            gh auth login
-            Write-Success "GitHub authentication successful"
-        }
-        catch {
-            Write-Error-Custom "GitHub authentication failed: $($_.Exception.Message)"
-            exit 1
-        }
+    catch {
+        Write-Error-Custom "GitHub authentication failed: $($_.Exception.Message)"
+        exit 1
     }
 }
 
@@ -856,11 +831,8 @@ function Test-Installation {
 function Main {
     Clear-Host
     
-    $setupType = "Stack Masters Setup"
-    
     Write-Host "================================================"
     Write-Host "   Stack Masters Windows Setup Script v$VERSION"
-    Write-Host "   $setupType"
     Write-Host "================================================"
     Write-Host ""
     
