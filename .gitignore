@@ -1,0 +1,173 @@
+# Operating System Files
+# -----------------------
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# Linux
+*~
+.directory
+.Trash-*
+
+# IDE and Editor Files
+# --------------------
+
+# Visual Studio Code
+.vscode/
+*.code-workspace
+
+# JetBrains IDEs
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# Visual Studio
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Vim
+*.swp
+*.swo
+*.swn
+.*.swp
+.*.swo
+.*.swn
+
+# Emacs
+*~
+\#*\#
+.\#*
+
+# Sublime Text
+*.sublime-workspace
+*.sublime-project
+
+# Logs and Databases
+# -----------------
+*.log
+logs/
+*.sql
+*.sqlite
+*.sqlite3
+*.db
+
+# Runtime and Temporary Files
+# --------------------------
+*.pid
+*.seed
+*.pid.lock
+tmp/
+temp/
+\temp
+*.tmp
+*.temp
+*.bak
+*.backup
+*.old
+*.orig
+
+# Package Files
+# -------------
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+*.rar
+*.7z
+*.dmg
+*.iso
+*.jar
+*.war
+*.ear
+
+# Dependency Directories
+# ----------------------
+node_modules/
+vendor/
+bower_components/
+
+# Build Output
+# -----------
+build/
+dist/
+out/
+target/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Environment Files
+# ----------------
+.env
+.env.local
+.env.*.local
+.env.development
+.env.test
+.env.production
+
+# Credentials and Secrets
+# ----------------------
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+secrets/
+credentials/
+
+# Docker
+# ------
+.docker/
+
+# Python
+# ------
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.Python
+venv/
+env/
+ENV/
+.venv
+
+# Test Coverage
+# ------------
+coverage/
+.coverage
+*.cover
+.hypothesis/
+.pytest_cache/
+
+# Documentation
+# ------------
+docs/_build/
+site/
+
+# Project Specific
+# ---------------
+packages-microsoft-prod.deb
+test-results/
+test-output/
+stack-masters/
+stack-masters.backup.*/
+
+# Keep test instances marker file
+!KEEP_INSTANCES
