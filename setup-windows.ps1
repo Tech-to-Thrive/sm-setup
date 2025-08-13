@@ -810,6 +810,8 @@ function Clone-Repository {
     try {
         # Ensure we clone to the exact directory we want
         gh repo clone $repoUrl "$cloneDir"
+        # Clear any lingering progress bars from git clone
+        Write-Progress -Activity " " -Completed
         Write-Success "Repository cloned to: $cloneDir"
         
         # Set environment variable for next steps
@@ -818,6 +820,8 @@ function Clone-Repository {
         return $cloneDir
     }
     catch {
+        # Clear any lingering progress bars even on failure
+        Write-Progress -Activity " " -Completed
         Write-Error-Custom "Failed to clone repository: $($_.Exception.Message)"
         exit 1
     }
