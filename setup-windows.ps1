@@ -781,6 +781,8 @@ function Clone-Repository {
                     Remove-Item -Path $cloneDir -Recurse -Force -ErrorAction Stop
                     # Clear any lingering progress bars from Remove-Item
                     Write-Progress -Activity " " -Completed
+                    # Force console to update by writing an empty line
+                    Write-Host ""
                     Write-Success "Existing directory removed"
                 }
                 catch {
