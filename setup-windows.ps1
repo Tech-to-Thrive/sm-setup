@@ -8,7 +8,7 @@ param(
 )
 
 # Script version
-$VERSION = "1.2.0"
+$VERSION = "1.2.1"
 
 # Script-level variables for executable paths
 $script:GitExePath = $null
@@ -1269,14 +1269,15 @@ function Main {
                 Write-Host "================================================"
                 Write-Host ""
                 
-                # Change to the repository directory and run the script
-                Push-Location $cloneDir
+                # Change to deploy\scripts directory where the script expects to be run
+                $scriptDir = Join-Path $cloneDir "deploy\scripts"
+                Push-Location $scriptDir
                 try {
-                    & $envScript
+                    & .\generate-env-config.ps1
                 }
                 catch {
                     Write-Error-Custom "Failed to run generate-env-config.ps1: $($_.Exception.Message)"
-                    Write-Info "You can run it manually later from: $cloneDir"
+                    Write-Info "You can run it manually later from: $scriptDir"
                 }
                 finally {
                     Pop-Location
@@ -1292,8 +1293,8 @@ function Main {
                 Write-Host ""
                 Write-Host "     .\setup-windows.ps1" -ForegroundColor Yellow
                 Write-Host ""
-                Write-Host "  Or manually navigate to: cd `"$cloneDir`""
-                Write-Host "  And run: .\deploy\scripts\generate-env-config.ps1"
+                Write-Host "  Or manually navigate to: cd `"$cloneDir\deploy\scripts`""
+                Write-Host "  And run: .\generate-env-config.ps1"
             }
         } else {
             Write-Host ""

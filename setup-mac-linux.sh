@@ -9,7 +9,7 @@
 set -euo pipefail
 
 # Script version
-VERSION="1.2.0"
+VERSION="1.2.1"
 
 # Parse command line arguments
 SKIP_AUTH=false
@@ -925,6 +925,7 @@ show_summary() {
     
     # Next steps
     if [ "$install_success" = true ] && [ -n "$STACK_DIR" ] && [ -d "$STACK_DIR" ]; then
+        # The generate-env-config.sh script is always at the same location in our controlled repository
         local env_script="$STACK_DIR/deploy/scripts/generate-env-config.sh"
         
         if [ -f "$env_script" ]; then
@@ -933,13 +934,21 @@ show_summary() {
                 log_success "All components installed successfully!"
                 echo ""
                 log_info "Starting environment configuration..."
-                echo "Running: generate-env-config.sh"
+                local script_name="${env_script##*/}"
+                echo "Running: $script_name"
                 echo ""
                 echo "=============================================="
                 echo ""
                 
-                # Change to the repository directory and run the script
-                cd "$STACK_DIR" && bash "$env_script"
+                # Change to deploy/scripts directory where the script expects to be run
+                cd "$STACK_DIR/deploy/scripts" || { log_error "Failed to change to $STACK_DIR/deploy/scripts"; exit 1; }
+                
+                # Execute the script from the deploy/scripts directory
+                if bash "./generate-env-config.sh"; then
+                    log_success "Environment configuration completed"
+                else
+                    log_warning "Environment configuration script encountered issues but continuing..."
+                fi
             else
                 echo ""
                 log_warning "Installation complete but Docker is not running"
@@ -952,12 +961,15 @@ show_summary() {
                     echo "     - Run: sudo systemctl start docker"
                 fi
                 echo "  2. Run environment setup:"
-                echo "     cd $STACK_DIR"
-                echo "     ./deploy/scripts/generate-env-config.sh"
+                echo "     cd $STACK_DIR/deploy/scripts"
+                echo "     ./generate-env-config.sh"
             fi
         else
             echo ""
             log_success "Installation completed!"
+            echo ""
+            log_warning "generate-env-config.sh not found at expected location"
+            log_info "Expected at: $STACK_DIR/deploy/scripts/generate-env-config.sh"
             echo ""
             log_info "Next steps:"
             echo "  1. Navigate to: cd $STACK_DIR"
