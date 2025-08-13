@@ -233,8 +233,6 @@ function Install-Git {
         Write-Info "Downloading and installing Git (this may take a few minutes)..."
         # Use --disable-interactivity instead of --silent to avoid progress characters
         $null = winget install --id Git.Git -e --source winget --accept-package-agreements --accept-source-agreements --disable-interactivity
-        # Clear any lingering progress bars from winget
-        Write-Progress -Activity " " -Completed
         
         # Wait for installation to complete
         Write-Info "Installation complete. Locating Git executable..."
@@ -337,8 +335,6 @@ function Install-GitHubCLI {
         Write-Info "Downloading and installing GitHub CLI (this may take a few minutes)..."
         # Use --disable-interactivity instead of --silent to avoid progress characters
         $null = winget install --id GitHub.cli -e --source winget --accept-package-agreements --accept-source-agreements --disable-interactivity
-        # Clear any lingering progress bars from winget
-        Write-Progress -Activity " " -Completed
         
         # Wait for installation to complete
         Write-Info "Installation complete. Locating GitHub CLI executable..."
@@ -540,8 +536,6 @@ function Install-Docker {
         # Install Docker Desktop
         Write-Info "Downloading and installing Docker Desktop (this is a large download ~500MB)..."
         $null = winget install --id Docker.DockerDesktop -e --source winget --accept-package-agreements --accept-source-agreements --disable-interactivity
-        # Clear any lingering progress bars from winget
-        Write-Progress -Activity " " -Completed
         
         Write-Success "Docker Desktop installed successfully"
         Write-Warning "A system restart is required for Docker to function properly"
@@ -777,12 +771,8 @@ function Clone-Repository {
             "1" {
                 Write-Info "Removing existing directory..."
                 try {
-                    # Force remove the directory
-                    Remove-Item -Path $cloneDir -Recurse -Force -ErrorAction Stop
-                    # Clear any lingering progress bars from Remove-Item
-                    Write-Progress -Activity " " -Completed
-                    # Force console to update by writing an empty line
-                    Write-Host ""
+                    # Force remove the directory - suppress progress bar (PowerShell 7.5.2 bug workaround)
+                    Remove-Item -Path $cloneDir -Recurse -Force -ErrorAction Stop -ProgressAction SilentlyContinue
                     Write-Success "Existing directory removed"
                 }
                 catch {
@@ -812,8 +802,6 @@ function Clone-Repository {
     try {
         # Ensure we clone to the exact directory we want
         gh repo clone $repoUrl "$cloneDir"
-        # Clear any lingering progress bars from git clone
-        Write-Progress -Activity " " -Completed
         Write-Success "Repository cloned to: $cloneDir"
         
         # Set environment variable for next steps
@@ -822,8 +810,6 @@ function Clone-Repository {
         return $cloneDir
     }
     catch {
-        # Clear any lingering progress bars even on failure
-        Write-Progress -Activity " " -Completed
         Write-Error-Custom "Failed to clone repository: $($_.Exception.Message)"
         exit 1
     }
@@ -1336,6 +1322,3 @@ function Main {
 
 # Run main function
 Main
-
-# Ensure any lingering progress bars are cleared before script exits
-Write-Progress -Activity " " -Completed
