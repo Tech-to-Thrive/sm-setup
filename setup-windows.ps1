@@ -4,15 +4,110 @@
 param(
     [string]$RepoUrl = "",
     [switch]$SkipAuth = $false,
-    [switch]$Help = $false
+    [switch]$Help = $false,
+    [switch]$Yes = $false
 )
 
 # Script version
-$VERSION = "1.2.2"
+$VERSION = "1.2.4"
 
 # Script-level variables for executable paths
 $script:GitExePath = $null
 $script:GhExePath = $null
+
+# Check PowerShell version (require 5.1+)
+if ($PSVersionTable.PSVersion.Major -lt 5 -or 
+    ($PSVersionTable.PSVersion.Major -eq 5 -and $PSVersionTable.PSVersion.Minor -lt 1)) {
+    Write-Host "ERROR: PowerShell 5.1 or higher is required" -ForegroundColor Red
+    Write-Host "Current version: $($PSVersionTable.PSVersion)" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "Please upgrade PowerShell:" -ForegroundColor Cyan
+    Write-Host "  Windows 10/11: Update Windows to get PowerShell 5.1+" -ForegroundColor White
+    Write-Host "  Windows Server: Install Windows Management Framework 5.1" -ForegroundColor White
+    Write-Host "  https://aka.ms/wmf51download" -ForegroundColor White
+    exit 1
+}
+
+# Detect system architecture
+function Get-SystemArchitecture {
+    # Multiple methods to ensure accurate detection
+    $arch = $null
+    
+    # Method 1: Environment variable (most reliable)
+    if ($env:PROCESSOR_ARCHITECTURE) {
+        switch ($env:PROCESSOR_ARCHITECTURE) {
+            "AMD64" { $arch = "x64" }
+            "x86" { 
+                # Check if running 32-bit PS on 64-bit OS
+                if ($env:PROCESSOR_ARCHITEW6432 -eq "AMD64") {
+                    $arch = "x64"
+                } else {
+                    $arch = "x86"
+                }
+            }
+            "ARM64" { $arch = "ARM64" }
+            "ARM" { $arch = "ARM" }
+        }
+    }
+    
+    # Method 2: WMI as fallback
+    if (-not $arch) {
+        try {
+            $processor = Get-WmiObject Win32_Processor | Select-Object -First 1
+            switch ($processor.Architecture) {
+                0 { $arch = "x86" }
+                1 { $arch = "MIPS" }
+                2 { $arch = "Alpha" }
+                3 { $arch = "PowerPC" }
+                5 { $arch = "ARM" }
+                6 { $arch = "ia64" }
+                9 { $arch = "x64" }
+                12 { $arch = "ARM64" }
+            }
+        } catch {
+            # WMI might fail in some environments
+        }
+    }
+    
+    # Method 3: Check system info
+    if (-not $arch) {
+        if ([System.IntPtr]::Size -eq 8) {
+            $arch = "x64"  # 64-bit process
+        } elseif ([System.IntPtr]::Size -eq 4) {
+            $arch = "x86"  # 32-bit process
+        }
+    }
+    
+    # Default to x64 if detection fails
+    if (-not $arch) {
+        $arch = "x64"
+    }
+    
+    return $arch
+}
+
+# Get OS version info
+function Get-WindowsVersion {
+    $os = Get-WmiObject -Class Win32_OperatingSystem
+    $version = [System.Environment]::OSVersion.Version
+    
+    $info = @{
+        Name = $os.Caption
+        Version = $os.Version
+        Build = $version.Build
+        Architecture = Get-SystemArchitecture
+        IsServer = $os.ProductType -eq 3
+        IsWindows10 = $version.Major -eq 10 -and $version.Build -lt 22000
+        IsWindows11 = $version.Major -eq 10 -and $version.Build -ge 22000
+        IsServer2022 = $os.Caption -like "*Server 2022*"
+        IsServer2025 = $os.Caption -like "*Server 2025*"
+    }
+    
+    return $info
+}
+
+# Store system info globally
+$script:SystemInfo = Get-WindowsVersion
 
 # Check if running as Administrator immediately
 $currentPrincipal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
@@ -78,28 +173,105 @@ function Write-Error-Custom {
     } catch {}
 }
 
-# Initialize logging AFTER admin check
-# Use $PSScriptRoot if available, otherwise use current directory
-if ($PSScriptRoot) {
-    $ScriptPath = $PSScriptRoot
-} elseif ($MyInvocation.MyCommand.Path) {
-    $ScriptPath = Split-Path -Parent $MyInvocation.MyCommand.Path
-} else {
-    $ScriptPath = Get-Location
-}
-$LogDir = Join-Path $ScriptPath "logs"
+# Initialize logging and state tracking AFTER admin check
+# Always use a safe location for logs that won't be deleted during setup
+$StateDir = Join-Path $env:APPDATA "StackMasters"
+$LogDir = Join-Path $StateDir "logs"
 New-Item -ItemType Directory -Force -Path $LogDir -ErrorAction SilentlyContinue | Out-Null
+
+# Fallback to temp if AppData isn't writable
+if (-not (Test-Path $LogDir)) {
+    $StateDir = Join-Path $env:TEMP "stack-masters-state"
+    $LogDir = Join-Path $env:TEMP "stack-masters-logs"
+    New-Item -ItemType Directory -Force -Path $LogDir -ErrorAction SilentlyContinue | Out-Null
+}
+
 $LogFile = Join-Path $LogDir "stack-masters-setup-$(Get-Date -Format 'yyyyMMdd-HHmmss').log"
+$StateFile = Join-Path $StateDir "setup-state.json"
+
+# State management functions
+function Save-State {
+    param(
+        [string]$Key,
+        [string]$Value
+    )
+    
+    try {
+        $state = @{}
+        if (Test-Path $StateFile) {
+            # PowerShell 5.1 compatible - convert to PSCustomObject first
+            $jsonObj = Get-Content $StateFile -Raw | ConvertFrom-Json
+            # Convert PSCustomObject to hashtable
+            $jsonObj.PSObject.Properties | ForEach-Object {
+                $state[$_.Name] = $_.Value
+            }
+        }
+        $state[$Key] = $Value
+        $state | ConvertTo-Json | Set-Content $StateFile -Force
+    } catch {
+        # State tracking is optional, don't fail if it doesn't work
+    }
+}
+
+function Get-State {
+    param([string]$Key)
+    
+    try {
+        if (Test-Path $StateFile) {
+            # PowerShell 5.1 compatible
+            $jsonObj = Get-Content $StateFile -Raw | ConvertFrom-Json
+            return $jsonObj.$Key
+        }
+    } catch {
+        return $null
+    }
+    return $null
+}
+
+function Clear-State {
+    try {
+        if (Test-Path $StateFile) {
+            # Use progress-safe removal for state file
+            $oldPref = $ProgressPreference
+            $ProgressPreference = 'SilentlyContinue'
+            try {
+                Remove-Item $StateFile -Force
+            }
+            finally {
+                $ProgressPreference = $oldPref
+            }
+        }
+    } catch {
+        # Optional operation
+    }
+}
+
+# Progress tracking
+$script:StepsTotal = 7
+$script:StepCurrent = 0
+
+function Show-Progress {
+    param([string]$StepName)
+    
+    $script:StepCurrent++
+    Write-Host ""
+    Write-Host "================================================" -ForegroundColor Cyan
+    Write-Host "Step $($script:StepCurrent) of $($script:StepsTotal): $StepName" -ForegroundColor Cyan
+    Write-Host "================================================" -ForegroundColor Cyan
+    Write-Host ""
+    
+    Save-State "current_step" $script:StepCurrent
+    Save-State "current_step_name" $StepName
+}
 
 # Test if we can write to log file
 try {
     Add-Content -Path $LogFile -Value "[$(Get-Date)] Setup script started" -ErrorAction Stop
+    Add-Content -Path $LogFile -Value "[$(Get-Date)] System: $($script:SystemInfo.Name) $($script:SystemInfo.Architecture)" -ErrorAction Stop
 } catch {
-    # If we can't write to logs, use temp directory
-    $LogDir = Join-Path $env:TEMP "stack-masters-logs"
-    New-Item -ItemType Directory -Force -Path $LogDir -ErrorAction SilentlyContinue | Out-Null
-    $LogFile = Join-Path $LogDir "stack-masters-setup-$(Get-Date -Format 'yyyyMMdd-HHmmss').log"
-    Write-Warning "Cannot write to local logs directory. Using temp directory: $LogDir"
+    # Final fallback
+    $LogFile = Join-Path $env:TEMP "stack-masters-setup-$(Get-Date -Format 'yyyyMMdd-HHmmss').log"
+    Write-Warning "Cannot write to AppData logs directory. Using temp: $LogFile"
 }
 
 function Show-Help {
@@ -112,12 +284,14 @@ USAGE:
 OPTIONS:
     -RepoUrl <string>     GitHub repository URL to clone
     -SkipAuth            Skip GitHub authentication (for testing)
+    -Yes                 Auto-confirm installation (skip confirmation prompt)
     -Help                Show this help message
 
 EXAMPLES:
     .\setup-windows.ps1
     .\setup-windows.ps1 -RepoUrl "https://github.com/Tech-to-Thrive/stack-masters"
     .\setup-windows.ps1 -SkipAuth
+    .\setup-windows.ps1 -Yes
 
 This script will install (using winget):
 - Git for Windows
@@ -607,9 +781,75 @@ function Authenticate-GitHub {
     }
 }
 
+# Normalize GitHub URL to standard format
+function Normalize-GitHubUrl {
+    param([string]$Url)
+    
+    if ([string]::IsNullOrWhiteSpace($Url)) {
+        return $null
+    }
+    
+    # Trim whitespace
+    $Url = $Url.Trim()
+    
+    # Remove trailing slashes
+    $Url = $Url.TrimEnd('/')
+    
+    # Handle various GitHub URL formats
+    # Examples:
+    # - github.com/owner/repo
+    # - https://github.com/owner/repo
+    # - http://github.com/owner/repo
+    # - git@github.com:owner/repo.git
+    # - git@github.com:owner/repo
+    # - https://github.com/owner/repo.git
+    # - https://github.com/owner/repo/
+    # - https://github.com/owner/repo/tree/main
+    
+    # Extract owner and repo using regex patterns
+    $owner = $null
+    $repo = $null
+    
+    # Pattern 1: SSH format (git@github.com:owner/repo.git or git@github.com:owner/repo)
+    if ($Url -match '^git@github\.com:([^/]+)/([^/\.]+)(\.git)?/?.*$') {
+        $owner = $Matches[1]
+        $repo = $Matches[2]
+    }
+    # Pattern 2: HTTPS/HTTP format with or without protocol
+    elseif ($Url -match '^(https?://)?github\.com/([^/]+)/([^/\.]+)(\.git)?/?.*$') {
+        $owner = $Matches[2]
+        $repo = $Matches[3]
+    }
+    # Pattern 3: Just owner/repo
+    elseif ($Url -match '^([^/]+)/([^/\.]+)(\.git)?/?.*$') {
+        $owner = $Matches[1]
+        $repo = $Matches[2]
+    }
+    
+    # If we successfully extracted owner and repo, build the normalized URL
+    if ($owner -and $repo) {
+        # Remove any trailing .git from repo name
+        $repo = $repo -replace '\.git$', ''
+        
+        # Build standard HTTPS URL
+        return "https://github.com/$owner/$repo"
+    }
+    
+    # If no pattern matched, return null
+    return $null
+}
+
 function Get-RepositoryUrl {
     if (-not [string]::IsNullOrEmpty($RepoUrl)) {
-        return $RepoUrl
+        # Normalize the provided URL
+        $normalizedUrl = Normalize-GitHubUrl -Url $RepoUrl
+        if (-not $normalizedUrl) {
+            Write-Error-Custom "Invalid GitHub repository URL format: $RepoUrl"
+            Write-Info "Expected format: https://github.com/owner/repository"
+            exit 1
+        }
+        Save-State "last_repo_url" $normalizedUrl
+        return $normalizedUrl
     }
     
     Write-Host ""
@@ -625,23 +865,39 @@ function Get-RepositoryUrl {
     Write-Host "  - https://github.com/AI-Stack-Masters/stack-community"
     Write-Host "    (Requires membership: https://www.skool.com/ai-stack-masters)" -ForegroundColor DarkGray
     Write-Host ""
+    Write-Info "Supported formats: HTTPS URLs, SSH URLs, or just owner/repo"
+    Write-Host ""
     
     $url = Read-Host "Repository URL"
     
-    if (-not ($url -match "^https://github\.com/[^/]+/[^/]+$")) {
-        Write-Error-Custom "Invalid GitHub repository URL format"
-        Write-Info "Expected format: https://github.com/owner/repository"
+    # Normalize the input URL
+    $normalizedUrl = Normalize-GitHubUrl -Url $url
+    
+    if (-not $normalizedUrl) {
+        Write-Error-Custom "Invalid GitHub repository URL format: $url"
+        Write-Info "Expected formats:"
+        Write-Host "  - https://github.com/owner/repository"
+        Write-Host "  - github.com/owner/repository"
+        Write-Host "  - git@github.com:owner/repository.git"
+        Write-Host "  - owner/repository"
         exit 1
     }
     
-    return $url
+    Write-Success "Normalized URL: $normalizedUrl"
+    
+    # Save for recovery
+    Save-State "last_repo_url" $normalizedUrl
+    
+    return $normalizedUrl
 }
 
 function Prompt-CloneDirectory {
     param([string]$RepoName)
     
-    # Use consistent location in user profile
-    $defaultDir = Join-Path $env:USERPROFILE "stack-masters"
+    # Use system-wide location for Docker containers
+    # ProgramData is the correct location for application data that needs to be accessible system-wide
+    $systemDir = "C:\ProgramData\StackMasters"
+    $userDir = Join-Path $env:USERPROFILE "stack-masters"
     $currentDir = Get-Location
     
     Write-Host ""
@@ -649,24 +905,34 @@ function Prompt-CloneDirectory {
     Write-Host ""
     Write-Host "Where would you like to clone the repository?"
     Write-Host ""
-    Write-Host "Important: Choose a permanent location where you'll keep this for updates and patches." -ForegroundColor Yellow
-    Write-Host "If unsure, use the recommended option (1)." -ForegroundColor Blue
+    Write-Host "Important: Since Docker runs system-wide, choose an appropriate location." -ForegroundColor Yellow
+    Write-Host "For production use, option 1 (system-wide) is strongly recommended." -ForegroundColor Blue
     Write-Host ""
     Write-Host "Repository name: $RepoName" -ForegroundColor Cyan
     Write-Host "Current directory: $currentDir"
     Write-Host ""
     Write-Host "Options:"
-    Write-Host "  1. $defaultDir (recommended)"
-    Write-Host "  2. $currentDir (current directory)"
-    Write-Host "  3. Custom path"
+    Write-Host "  1. $systemDir (recommended - system-wide, all users)" -ForegroundColor Green
+    Write-Host "  2. $userDir (user-specific, won't work for other users)" -ForegroundColor Yellow
+    Write-Host "  3. $currentDir (current directory)"
+    Write-Host "  4. Custom path"
     Write-Host ""
     
-    $choice = Read-Host "Enter choice [1-3] or custom path (default: 1)"
+    $choice = Read-Host "Enter choice [1-4] or custom path (default: 1)"
     
     $cloneBaseDir = switch ($choice) {
-        { $_ -eq "1" -or [string]::IsNullOrEmpty($_) } { $defaultDir }
-        "2" { $currentDir }
-        "3" { 
+        { $_ -eq "1" -or [string]::IsNullOrEmpty($_) } { 
+            # System-wide location - requires admin rights (which we already have)
+            $systemDir 
+        }
+        "2" { 
+            Write-Warning "User-specific location selected. Docker containers may not be accessible to other users or system services."
+            Write-Host "Press Enter to continue or Ctrl+C to cancel..." -ForegroundColor Yellow
+            Read-Host
+            $userDir 
+        }
+        "3" { $currentDir }
+        "4" { 
             $customPath = Read-Host "Enter custom path"
             $customPath
         }
@@ -679,6 +945,15 @@ function Prompt-CloneDirectory {
     
     # Set final clone directory
     $cloneDir = Join-Path $cloneBaseDir $RepoName
+    
+    # Check if using system directory and provide Docker volume guidance
+    if ($cloneBaseDir -match "^C:\\ProgramData" -or $cloneBaseDir -match "^C:\\Program Files") {
+        Write-Info "System-wide directory selected. This is the recommended choice for Docker deployments."
+        Write-Host ""
+        Write-Host "Note: Docker Desktop will need permission to access this directory." -ForegroundColor Cyan
+        Write-Host "This is typically configured automatically." -ForegroundColor Cyan
+        Write-Host ""
+    }
     
     # Validate and create parent directory
     Validate-AndCreateDirectory -Directory $cloneBaseDir
@@ -695,7 +970,15 @@ function Validate-AndCreateDirectory {
             $testFile = Join-Path $Directory "test_write_permissions.tmp"
             try {
                 [System.IO.File]::WriteAllText($testFile, "test")
-                Remove-Item $testFile -Force
+                # Progress-safe removal
+                $oldPref = $ProgressPreference
+                $ProgressPreference = 'SilentlyContinue'
+                try {
+                    Remove-Item $testFile -Force
+                }
+                finally {
+                    $ProgressPreference = $oldPref
+                }
                 Write-Info "Using existing directory: $Directory"
             }
             catch {
@@ -725,13 +1008,262 @@ function Validate-AndCreateDirectory {
     }
 }
 
+# Helper function: Safe directory removal with retry logic
+function Safe-RemoveDirectory {
+    param(
+        [string]$Directory,
+        [int]$MaxRetries = 3
+    )
+    
+    $retryDelay = 2
+    
+    for ($i = 1; $i -le $MaxRetries; $i++) {
+        Write-Info "Attempting to remove directory (attempt $i/$MaxRetries)..."
+        
+        try {
+            # Save current progress preference and disable progress bar
+            $oldProgressPreference = $ProgressPreference
+            $ProgressPreference = 'SilentlyContinue'
+            
+            try {
+                # First, try normal removal with force
+                Remove-Item -Path $Directory -Recurse -Force -ErrorAction Stop
+            }
+            finally {
+                # Restore progress preference
+                $ProgressPreference = $oldProgressPreference
+                
+                # Clear any lingering progress bar by writing spaces and returning cursor
+                Write-Host "`r$(' ' * 120)`r" -NoNewline
+            }
+            
+            # Verify it's actually gone
+            if (-not (Test-Path $Directory)) {
+                Write-Success "Directory removed successfully"
+                return $true
+            }
+        }
+        catch {
+            Write-Warning "Directory removal failed: $($_.Exception.Message)"
+        }
+        
+        # If we're here, removal failed - try recovery strategies
+        Write-Warning "Attempting recovery strategies..."
+        
+        # Strategy 1: Close file handles (requires handle.exe or similar)
+        # For now, we'll ask user to close programs
+        if ($i -eq 1) {
+            Write-Warning "Directory may be in use by another program"
+            Write-Host "Please close any programs that might be using files in:" -ForegroundColor Yellow
+            Write-Host "  $Directory" -ForegroundColor Yellow
+            Write-Host ""
+        }
+        
+        # Strategy 2: Try to rename first (sometimes helps with locked files)
+        try {
+            $tempName = "$Directory.removing"
+            Rename-Item -Path $Directory -NewName $tempName -Force -ErrorAction SilentlyContinue
+            
+            # Save current progress preference and disable progress bar
+            $oldProgressPreference = $ProgressPreference
+            $ProgressPreference = 'SilentlyContinue'
+            
+            try {
+                Remove-Item -Path $tempName -Recurse -Force -ErrorAction SilentlyContinue
+            }
+            finally {
+                # Restore progress preference
+                $ProgressPreference = $oldProgressPreference
+                
+                # Clear any lingering progress bar
+                Write-Host "`r$(' ' * 120)`r" -NoNewline
+            }
+            
+            if (-not (Test-Path $Directory) -and -not (Test-Path $tempName)) {
+                Write-Success "Directory removed using rename strategy"
+                return $true
+            }
+        }
+        catch {
+            # Rename strategy failed, continue
+        }
+        
+        # Check if directory still exists
+        if (-not (Test-Path $Directory)) {
+            Write-Success "Directory removed successfully"
+            return $true
+        }
+        
+        # If still here, wait before retry
+        if ($i -lt $MaxRetries) {
+            Write-Warning "Waiting $retryDelay seconds before retry..."
+            Start-Sleep -Seconds $retryDelay
+            $retryDelay *= 2  # Exponential backoff
+        }
+    }
+    
+    # All retries failed
+    Write-Error-Custom "Failed to remove directory after $MaxRetries attempts"
+    Write-Info "Manual intervention required. Please try:"
+    Write-Host "  1. Close any programs using files in: $Directory" -ForegroundColor Yellow
+    Write-Host "  2. Check folder permissions" -ForegroundColor Yellow
+    Write-Host "  3. Run manually: Remove-Item -Path ""$Directory"" -Recurse -Force" -ForegroundColor Yellow
+    Write-Host "  4. Or delete the folder using File Explorer" -ForegroundColor Yellow
+    return $false
+}
+
+# Helper function: Clone with retry logic
+function Clone-WithRetry {
+    param(
+        [string]$RepoUrl,
+        [string]$CloneDir,
+        [int]$MaxRetries = 3
+    )
+    
+    $retryDelay = 2
+    
+    for ($i = 1; $i -le $MaxRetries; $i++) {
+        Write-Info "Cloning repository (attempt $i/$MaxRetries)..."
+        
+        # Clear any partial clone
+        if (Test-Path $CloneDir) {
+            Write-Warning "Partial clone detected, cleaning up..."
+            if (-not (Safe-RemoveDirectory -Directory $CloneDir)) {
+                return $false
+            }
+        }
+        
+        # Attempt clone
+        try {
+            Write-Info "Starting clone operation. This may take several minutes for large repositories..."
+            Write-Host ""
+            
+            # Run clone and let user see the progress
+            # We'll capture stderr only if it fails
+            $errorOutput = $null
+            gh repo clone $RepoUrl "$CloneDir"
+            $cloneExitCode = $LASTEXITCODE
+            
+            # If clone failed, capture the error for analysis
+            if ($cloneExitCode -ne 0) {
+                # Try to get the last error message
+                $errorOutput = $Error[0].ToString()
+            }
+            
+            Write-Host ""  # Add spacing after clone output
+            
+            # Verify clone actually succeeded with multiple checks
+            if ($cloneExitCode -eq 0) {
+                # Check for .git directory
+                if (Test-Path "$CloneDir\.git") {
+                    # Additional verification - check if git recognizes it as a valid repo
+                    Push-Location $CloneDir
+                    try {
+                        $gitStatus = git status 2>&1
+                        $gitExitCode = $LASTEXITCODE
+                        
+                        if ($gitExitCode -eq 0) {
+                            # Final check - ensure there are actual files
+                            $fileCount = (Get-ChildItem -Path . -File -Recurse -ErrorAction SilentlyContinue | Measure-Object).Count
+                            if ($fileCount -gt 0) {
+                                Write-Success "Repository cloned successfully"
+                                return $true
+                            }
+                            else {
+                                Write-Warning "Clone appeared to succeed but no files found in repository"
+                            }
+                        }
+                        else {
+                            Write-Warning "Clone appeared to succeed but git status failed: $gitStatus"
+                        }
+                    }
+                    finally {
+                        Pop-Location
+                    }
+                }
+                else {
+                    Write-Warning "Clone reported success but .git directory not found"
+                }
+            }
+            
+            # If we get here, clone failed
+            if ($errorOutput) {
+                Write-Warning "Clone failed with error: $errorOutput"
+            } else {
+                Write-Warning "Clone failed (check output above for details)"
+            }
+            
+            # Check for SSL errors specifically
+            if ($errorOutput -match "SSL|decryption failed|bad record mac") {
+                Write-Warning "SSL/TLS error detected. This could be caused by:"
+                Write-Host "  - Corporate proxy or firewall" -ForegroundColor Yellow
+                Write-Host "  - Antivirus software intercepting SSL" -ForegroundColor Yellow  
+                Write-Host "  - Network connectivity issues" -ForegroundColor Yellow
+                Write-Host "  - Git SSL configuration" -ForegroundColor Yellow
+                Write-Host ""
+                Write-Host "Try running: git config --global http.sslVerify false" -ForegroundColor Cyan
+                Write-Host "Note: Only use this temporarily for testing!" -ForegroundColor Red
+            }
+        }
+        catch {
+            Write-Warning "Clone failed: $($_.Exception.Message)"
+        }
+        
+        # Check for common issues
+        try {
+            gh auth status 2>&1 | Out-Null
+            if ($LASTEXITCODE -ne 0) {
+                Write-Error-Custom "GitHub authentication lost. Please run: gh auth login"
+                return $false
+            }
+        }
+        catch {
+            Write-Warning "Could not verify GitHub authentication"
+        }
+        
+        # Check network connectivity
+        try {
+            $ping = Test-Connection -ComputerName "github.com" -Count 1 -Quiet
+            if (-not $ping) {
+                Write-Warning "Network connectivity issue detected"
+            }
+        }
+        catch {
+            Write-Warning "Could not test network connectivity"
+        }
+        
+        # Wait before retry
+        if ($i -lt $MaxRetries) {
+            Write-Info "Waiting $retryDelay seconds before retry..."
+            Start-Sleep -Seconds $retryDelay
+            $retryDelay *= 2
+        }
+    }
+    
+    # All retries failed
+    Write-Error-Custom "Failed to clone repository after $MaxRetries attempts"
+    Write-Info "Please check:"
+    Write-Host "  1. Network connectivity: ping github.com" -ForegroundColor Yellow
+    Write-Host "  2. GitHub authentication: gh auth status" -ForegroundColor Yellow
+    Write-Host "  3. Repository access: gh repo view $RepoUrl" -ForegroundColor Yellow
+    Write-Host "  4. Disk space: Get-PSDrive C" -ForegroundColor Yellow
+    return $false
+}
+
 function Clone-Repository {
     $repoUrl = Get-RepositoryUrl
     
-    # Extract repository name from URL
-    $repoName = [System.IO.Path]::GetFileNameWithoutExtension((Split-Path $repoUrl -Leaf))
+    # Save state for recovery
+    Save-State -Key "last_repo_url" -Value $repoUrl
     
-    Write-Info "Repository: $repoUrl"
+    # Extract repository info from normalized URL (https://github.com/owner/repo)
+    # Since URL is normalized, we can use simple extraction
+    $repoPath = $repoUrl -replace 'https://github.com/', ''  # Remove prefix
+    $repoParts = $repoPath -split '/', 2                     # Split into owner and repo
+    $repoOwner = $repoParts[0]
+    $repoName = $repoParts[1]
+    
+    Write-Info "Repository: $repoPath"
     
     # Prompt user for clone directory
     $cloneDir = Prompt-CloneDirectory -RepoName $repoName
@@ -741,7 +1273,6 @@ function Clone-Repository {
     # Check if user has access to the repository
     if (-not $SkipAuth) {
         try {
-            $repoPath = ($repoUrl -replace 'https://github.com/', '')
             gh repo view $repoPath | Out-Null
             Write-Success "Access to repository confirmed!"
         }
@@ -770,14 +1301,18 @@ function Clone-Repository {
         switch ($choice) {
             "1" {
                 Write-Info "Removing existing directory..."
-                try {
-                    # Force remove the directory - suppress progress bar (PowerShell 7.5.2 bug workaround)
-                    Remove-Item -Path $cloneDir -Recurse -Force -ErrorAction Stop -ProgressAction SilentlyContinue
-                    Write-Success "Existing directory removed"
+                if (Safe-RemoveDirectory -Directory $cloneDir) {
+                    # Directory removed successfully, continue with clone
                 }
-                catch {
-                    Write-Error-Custom "Failed to remove existing directory: $($_.Exception.Message)"
-                    Write-Info "Please manually remove the directory and try again"
+                else {
+                    Write-Error-Custom "Failed to remove existing directory"
+                    Write-Host ""
+                    Write-Host "Recovery options:" -ForegroundColor Yellow
+                    Write-Host "  1. Fix the issue manually and re-run the script" -ForegroundColor White
+                    Write-Host "  2. Choose a different directory when prompted" -ForegroundColor White
+                    Write-Host "  3. Run the script from a different location" -ForegroundColor White
+                    Write-Host ""
+                    Read-Host "Press Enter to exit and try again"
                     exit 1
                 }
             }
@@ -796,21 +1331,28 @@ function Clone-Repository {
         }
     }
     
-    # Clone the repository
-    Write-Info "Cloning repository: $repoUrl"
-    Write-Info "Destination: $cloneDir"
-    try {
-        # Ensure we clone to the exact directory we want
-        gh repo clone $repoUrl "$cloneDir"
-        Write-Success "Repository cloned to: $cloneDir"
+    # Clone the repository with retry logic
+    Write-Info "Starting repository clone process..."
+    if (Clone-WithRetry -RepoUrl $repoUrl -CloneDir $cloneDir) {
+        Write-Success "Repository successfully cloned to: $cloneDir"
         
         # Set environment variable for next steps
         [Environment]::SetEnvironmentVariable("STACK_MASTERS_DIR", $cloneDir, "Process")
         
+        # Save state for recovery
+        Save-State "last_clone_dir" $cloneDir
+        
         return $cloneDir
     }
-    catch {
-        Write-Error-Custom "Failed to clone repository: $($_.Exception.Message)"
+    else {
+        Write-Error-Custom "Repository cloning failed"
+        Write-Host ""
+        Write-Host "Next steps:" -ForegroundColor Yellow
+        Write-Host "  1. Fix any issues mentioned above" -ForegroundColor White
+        Write-Host "  2. Re-run this script: .\setup-windows.ps1" -ForegroundColor White
+        Write-Host "  3. Or manually clone: gh repo clone $repoUrl ""$cloneDir""" -ForegroundColor White
+        Write-Host ""
+        Write-Host "For help, check the log file: $LogFile" -ForegroundColor Cyan
         exit 1
     }
 }
@@ -919,12 +1461,48 @@ function Main {
     Write-Host "   Stack Masters Windows Setup Script v$VERSION"
     Write-Host "================================================"
     Write-Host ""
+    Write-Info "System: $($script:SystemInfo.Name)"
+    Write-Info "Architecture: $($script:SystemInfo.Architecture)"
+    Write-Host ""
     
     if ($Help) {
         Show-Help
         return
     }
     
+    # ARM64 specific notice
+    if ($script:SystemInfo.Architecture -eq "ARM64") {
+        Write-Warning "Running on ARM64 architecture"
+        Write-Info "Docker Desktop supports Windows ARM64 starting from version 4.0+"
+        Write-Host ""
+    }
+    
+    # Check for previous incomplete setup
+    $lastRepoUrl = Get-State "last_repo_url"
+    $lastCloneDir = Get-State "last_clone_dir"
+    if ($lastRepoUrl -or $lastCloneDir) {
+        Write-Warning "Previous setup was interrupted"
+        if ($lastRepoUrl) { Write-Host "Last attempted repository: $lastRepoUrl" -ForegroundColor Yellow }
+        if ($lastCloneDir) { Write-Host "Last attempted directory: $lastCloneDir" -ForegroundColor Yellow }
+        Write-Host ""
+        
+        if (-not $Yes) {
+            $continueSetup = Read-Host "Continue with previous setup? [Y/n]"
+            if ([string]::IsNullOrEmpty($continueSetup) -or $continueSetup -match '^[Yy]') {
+                if ($lastRepoUrl) { $RepoUrl = $lastRepoUrl }
+                if ($lastCloneDir) { $script:LastCloneDir = $lastCloneDir }
+            }
+            else {
+                Clear-State
+            }
+        }
+        else {
+            # Auto-confirm mode, continue with previous
+            if ($lastRepoUrl) { $RepoUrl = $lastRepoUrl }
+            if ($lastCloneDir) { $script:LastCloneDir = $lastCloneDir }
+        }
+        Write-Host ""
+    }
     
     # Check what's already installed
     Write-Host ""
@@ -1025,13 +1603,18 @@ function Main {
     Write-Host "     - Check system resources"
     Write-Host ""
     
-    # Get confirmation
-    Write-Host "Do you want to proceed with the installation?" -ForegroundColor Yellow
-    $confirmation = Read-Host "Type 'yes' to continue or anything else to exit"
-    
-    if ($confirmation -ne 'yes') {
-        Write-Warning "Installation cancelled by user"
-        exit 0
+    # Get confirmation unless -Yes is specified
+    if (-not $Yes) {
+        Write-Host "Do you want to proceed with the installation?" -ForegroundColor Yellow
+        $confirmation = Read-Host "Type 'yes' to continue or anything else to exit"
+        
+        if ($confirmation -ne 'yes') {
+            Write-Warning "Installation cancelled by user"
+            exit 0
+        }
+    }
+    else {
+        Write-Info "Auto-confirm mode enabled, proceeding with installation..."
     }
     
     Write-Host ""
@@ -1047,8 +1630,13 @@ function Main {
     }
     
     # Install components
+    Show-Progress "Installing Git"
     Install-Git
+    
+    Show-Progress "Installing GitHub CLI"
     Install-GitHubCLI
+    
+    Show-Progress "Installing Docker Desktop"
     Install-Docker
     
     # System preparation complete
@@ -1079,7 +1667,7 @@ function Main {
     
     # If Docker needs restart, stop here and tell user to restart
     if ($dockerNeedsRestart) {
-        Clear-Host
+        Write-Host ""
         Write-Host "================================================"
         Write-Warning "SYSTEM RESTART REQUIRED"
         Write-Host "================================================"
@@ -1109,14 +1697,19 @@ function Main {
     # Ensure git and gh commands are available (creates wrappers if needed)
     Ensure-CommandAvailable
     
+    Show-Progress "Setting up GitHub authentication"
     Authenticate-GitHub
+    
+    Show-Progress "Cloning repository"
     $cloneDir = Clone-Repository
     
     # Validate installation
+    Show-Progress "Validating installation"
     Test-Installation
     
-    # Clear screen and show summary
-    Clear-Host
+    # Show summary
+    Write-Host ""
+    Write-Host ""
     Write-Host "================================================"
     Write-Host "   Stack Masters Installation Summary"
     Write-Host "================================================"
@@ -1320,5 +1913,63 @@ function Main {
     Write-Info "Log file: $LogFile"
 }
 
+# Cleanup handler for script exit
+$script:CleanupDone = $false
+
+function Invoke-Cleanup {
+    if ($script:CleanupDone) { return }
+    $script:CleanupDone = $true
+    
+    if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne $null) {
+        Write-Host ""
+        Write-Warning "Setup interrupted or failed!"
+        
+        $currentStep = Get-State "current_step_name"
+        if ($currentStep) {
+            Write-Host "Failed at step: $currentStep" -ForegroundColor Yellow
+        }
+        
+        Write-Host ""
+        Write-Host "Recovery options:" -ForegroundColor Yellow
+        Write-Host "  1. Check the log file for details: $LogFile" -ForegroundColor Cyan
+        Write-Host "  2. Fix any issues mentioned above" -ForegroundColor White
+        Write-Host "  3. Re-run the script to continue: .\setup-windows.ps1" -ForegroundColor White
+        Write-Host ""
+        
+        # Save current state for recovery
+        if ($RepoUrl) {
+            Save-State "last_repo_url" $RepoUrl
+        }
+    }
+    elseif ($LASTEXITCODE -eq 0) {
+        # Success - clear state
+        Clear-State
+        Write-Host ""
+        Write-Success "Setup completed successfully!"
+    }
+}
+
+# Register cleanup for Ctrl+C
+[console]::TreatControlCAsInput = $false
+$null = Register-EngineEvent -SourceIdentifier PowerShell.Exiting -Action {
+    Invoke-Cleanup
+}
+
+# Handle Ctrl+C
+trap {
+    Write-Host ""
+    Write-Warning "Setup interrupted by user"
+    Invoke-Cleanup
+    exit 130
+}
+
 # Run main function
-Main
+try {
+    Main
+    Invoke-Cleanup
+}
+catch {
+    Write-Error-Custom "Unexpected error: $($_.Exception.Message)"
+    Invoke-Cleanup
+    exit 1
+}

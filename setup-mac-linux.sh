@@ -14,6 +14,7 @@ VERSION="1.2.1"
 # Parse command line arguments
 SKIP_AUTH=false
 REPO_URL=""
+AUTO_CONFIRM=false
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -25,6 +26,10 @@ while [[ $# -gt 0 ]]; do
             REPO_URL="$2"
             shift 2
             ;;
+        --yes|-y)
+            AUTO_CONFIRM=true
+            shift
+            ;;
         --help)
             echo "Stack Masters Setup Script v$VERSION"
             echo ""
@@ -35,6 +40,7 @@ while [[ $# -gt 0 ]]; do
             echo "Options:"
             echo "  --skip-auth       Skip GitHub authentication (for testing)"
             echo "  --repo-url URL    GitHub repository URL to clone"
+            echo "  --yes, -y         Auto-confirm installation (skip confirmation prompt)"
             echo "  --help            Show this help message"
             echo ""
             echo "Examples:"
@@ -61,30 +67,73 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# Initialize logging
-LOG_DIR="${PWD}/logs"
-mkdir -p "$LOG_DIR" 2>/dev/null || LOG_DIR="/tmp/stack-masters-logs"
+# Initialize logging and state tracking
+# Always use a safe location for logs that won't be deleted during setup
+STATE_DIR="${HOME}/.stack-masters"
+LOG_DIR="${STATE_DIR}/logs"
+mkdir -p "$LOG_DIR" 2>/dev/null || {
+    STATE_DIR="/tmp/stack-masters-state"
+    LOG_DIR="/tmp/stack-masters-logs"
+    mkdir -p "$LOG_DIR" 2>/dev/null || LOG_DIR="/tmp"
+}
 LOG_FILE="$LOG_DIR/stack-masters-setup-$(date +%Y%m%d-%H%M%S).log"
+STATE_FILE="$STATE_DIR/setup-state.json"
 
-# Log functions
+# State management functions (using simple key=value format, no jq dependency)
+save_state() {
+    local key="$1"
+    local value="$2"
+    # Ensure state directory exists
+    mkdir -p "$(dirname "$STATE_FILE")" 2>/dev/null
+    
+    # Create or update state file
+    if [ -f "$STATE_FILE" ]; then
+        # Remove existing key if present
+        grep -v "^${key}=" "$STATE_FILE" > "${STATE_FILE}.tmp" 2>/dev/null || true
+        mv "${STATE_FILE}.tmp" "$STATE_FILE"
+    fi
+    # Append new key=value
+    echo "${key}=${value}" >> "$STATE_FILE"
+}
+
+get_state() {
+    local key="$1"
+    if [ -f "$STATE_FILE" ]; then
+        grep "^${key}=" "$STATE_FILE" 2>/dev/null | cut -d'=' -f2-
+    fi
+}
+
+clear_state() {
+    rm -f "$STATE_FILE" 2>/dev/null
+}
+
+# Log functions with safe writing
 log_info() {
     echo -e "${BLUE}[INFO]${NC} $1"
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] INFO: $1" >> "$LOG_FILE" 2>/dev/null
+    if [ -d "$(dirname "$LOG_FILE")" ]; then
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] INFO: $1" >> "$LOG_FILE" 2>/dev/null
+    fi
 }
 
 log_success() {
     echo -e "${GREEN}[SUCCESS]${NC} $1"
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] SUCCESS: $1" >> "$LOG_FILE" 2>/dev/null
+    if [ -d "$(dirname "$LOG_FILE")" ]; then
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] SUCCESS: $1" >> "$LOG_FILE" 2>/dev/null
+    fi
 }
 
 log_warning() {
     echo -e "${YELLOW}[WARNING]${NC} $1"
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] WARNING: $1" >> "$LOG_FILE" 2>/dev/null
+    if [ -d "$(dirname "$LOG_FILE")" ]; then
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] WARNING: $1" >> "$LOG_FILE" 2>/dev/null
+    fi
 }
 
 log_error() {
     echo -e "${RED}[ERROR]${NC} $1"
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: $1" >> "$LOG_FILE" 2>/dev/null
+    if [ -d "$(dirname "$LOG_FILE")" ]; then
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: $1" >> "$LOG_FILE" 2>/dev/null
+    fi
 }
 
 # Early OS detection (minimal, just for elevation decision)
@@ -447,10 +496,69 @@ github_auth() {
     fi
 }
 
+# Normalize GitHub URL to standard format
+normalize_github_url() {
+    local url="$1"
+    
+    # Return empty if no URL provided
+    if [ -z "$url" ]; then
+        echo ""
+        return
+    fi
+    
+    # Trim whitespace (works on both macOS and Linux)
+    url=$(echo "$url" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    
+    # Remove trailing slashes
+    url="${url%/}"
+    
+    # Remove any trailing path components after the repo name
+    # This handles URLs like: https://github.com/owner/repo/tree/main
+    # Extract just the owner/repo part
+    
+    local owner=""
+    local repo=""
+    
+    # Handle various GitHub URL formats
+    # Pattern 1: SSH format (git@github.com:owner/repo.git or git@github.com:owner/repo)
+    if [[ "$url" =~ ^git@github\.com:([^/]+)/([^/\.]+)(\.git)?/?.*$ ]]; then
+        owner="${BASH_REMATCH[1]}"
+        repo="${BASH_REMATCH[2]}"
+    # Pattern 2: HTTPS/HTTP format with or without protocol
+    elif [[ "$url" =~ ^(https?://)?github\.com/([^/]+)/([^/\.]+)(\.git)?/?.*$ ]]; then
+        owner="${BASH_REMATCH[2]}"
+        repo="${BASH_REMATCH[3]}"
+    # Pattern 3: Just owner/repo
+    elif [[ "$url" =~ ^([^/@]+)/([^/\.]+)(\.git)?/?.*$ ]]; then
+        owner="${BASH_REMATCH[1]}"
+        repo="${BASH_REMATCH[2]}"
+    fi
+    
+    # If we successfully extracted owner and repo, build the normalized URL
+    if [ -n "$owner" ] && [ -n "$repo" ]; then
+        # Remove any .git extension from repo name
+        repo="${repo%.git}"
+        
+        # Build standard HTTPS URL
+        echo "https://github.com/$owner/$repo"
+        return
+    fi
+    
+    # If no pattern matched, return empty
+    echo ""
+}
+
 # Get repository URL
 get_repository_url() {
     if [ -n "$REPO_URL" ]; then
-        echo "$REPO_URL"
+        # Normalize any provided URL
+        local normalized=$(normalize_github_url "$REPO_URL")
+        if [ -z "$normalized" ]; then
+            log_error "Invalid GitHub repository URL format: $REPO_URL" >&2
+            log_info "Expected format: https://github.com/owner/repository" >&2
+            exit 1
+        fi
+        echo "$normalized"
         return
     fi
     
@@ -473,12 +581,28 @@ get_repository_url() {
         echo -e "${YELLOW}  2. https://github.com/AI-Stack-Masters/stack-community${NC}"
         echo -e "     ${BLUE}(Requires membership: https://www.skool.com/ai-stack-masters)${NC}"
         echo ""
+        log_info "Supported formats: HTTPS URLs, SSH URLs, or just owner/repo"
         echo "=========================================="
         echo ""
     } >&2
     
     read -p "$(echo -e ${GREEN}Repository URL: ${NC})" url
-    echo "$url"
+    
+    # Normalize the input URL
+    local normalized=$(normalize_github_url "$url")
+    
+    if [ -z "$normalized" ]; then
+        log_error "Invalid GitHub repository URL format: $url" >&2
+        log_info "Expected formats:" >&2
+        echo "  - https://github.com/owner/repository" >&2
+        echo "  - github.com/owner/repository" >&2
+        echo "  - git@github.com:owner/repository.git" >&2
+        echo "  - owner/repository" >&2
+        exit 1
+    fi
+    
+    log_success "Normalized URL: $normalized" >&2
+    echo "$normalized"
 }
 
 # Prompt user for clone directory selection
@@ -493,17 +617,33 @@ prompt_clone_directory() {
     echo ""
     echo -e "${YELLOW}Important:${NC} Choose a permanent location where you'll keep this for updates and patches."
     echo -e "${BLUE}If unsure, use the recommended option (1).${NC}"
+    
+    # Add system-specific guidance
+    if [[ "$OS" == "linux" ]]; then
+        echo ""
+        echo -e "${CYAN}Note: On Linux servers, consider using a system-wide location like /opt/stack-masters${NC}"
+        echo -e "${CYAN}if multiple users need access to the Docker containers.${NC}"
+    fi
     echo ""
     echo "Repository name: $REPO_NAME"
     echo "Current directory: $(pwd)"
     echo ""
     echo "Options:"
     echo "  1. $default_dir (recommended)"
-    echo "  2. $(pwd) (current directory)" 
-    echo "  3. Custom path"
+    echo "  2. $(pwd) (current directory)"
+    if [[ "$OS" == "linux" ]]; then
+        echo "  3. /opt/stack-masters (system-wide, requires sudo)"
+        echo "  4. Custom path"
+    else
+        echo "  3. Custom path"
+    fi
     echo ""
     
-    read -p "Enter choice [1-3] or custom path (default: 1): " choice
+    if [[ "$OS" == "linux" ]]; then
+        read -p "Enter choice [1-4] or custom path (default: 1): " choice
+    else
+        read -p "Enter choice [1-3] or custom path (default: 1): " choice
+    fi
     
     case $choice in
         1|"")
@@ -513,8 +653,25 @@ prompt_clone_directory() {
             CLONE_BASE_DIR="$(pwd)"
             ;;
         3)
-            read -p "Enter custom path: " custom_path
-            CLONE_BASE_DIR="$custom_path"
+            if [[ "$OS" == "linux" ]]; then
+                CLONE_BASE_DIR="/opt/stack-masters"
+                log_warning "System-wide location selected. This will require sudo permissions."
+                echo "Docker containers will be accessible to all users and system services."
+                echo ""
+                read -p "Press Enter to continue or Ctrl+C to cancel..."
+            else
+                read -p "Enter custom path: " custom_path
+                CLONE_BASE_DIR="$custom_path"
+            fi
+            ;;
+        4)
+            if [[ "$OS" == "linux" ]]; then
+                read -p "Enter custom path: " custom_path
+                CLONE_BASE_DIR="$custom_path"
+            else
+                # On non-Linux, 4 is not a valid option, treat as custom path
+                CLONE_BASE_DIR="$choice"
+            fi
             ;;
         *)
             # Treat anything else as a custom path
@@ -557,10 +714,194 @@ validate_and_create_directory() {
         if mkdir -p "$dir" 2>/dev/null; then
             log_success "Created directory: $dir"
         else
-            log_error "Failed to create directory: $dir"
-            exit 1
+            # Try with sudo if it's a system directory
+            if [[ "$dir" =~ ^/(opt|srv|var)/ ]] && command -v sudo &>/dev/null; then
+                log_info "Attempting to create system directory with sudo..."
+                if sudo mkdir -p "$dir"; then
+                    # Set ownership to current user for easier management
+                    sudo chown -R "$USER:$(id -gn)" "$dir"
+                    log_success "Created system directory: $dir"
+                else
+                    log_error "Failed to create directory even with sudo: $dir"
+                    exit 1
+                fi
+            else
+                log_error "Failed to create directory: $dir"
+                exit 1
+            fi
         fi
     fi
+}
+
+# Helper function: Safe directory removal with retry logic
+safe_remove_directory() {
+    local dir="$1"
+    local max_retries=3
+    local retry_delay=2
+    
+    for i in $(seq 1 $max_retries); do
+        log_info "Attempting to remove directory (attempt $i/$max_retries)..."
+        
+        # First, try to remove normally
+        if rm -rf "$dir" 2>/dev/null; then
+            # Verify it's actually gone
+            if [ ! -d "$dir" ]; then
+                log_success "Directory removed successfully"
+                return 0
+            fi
+        fi
+        
+        # If we're here, removal failed
+        log_warning "Directory removal failed, attempting recovery..."
+        
+        # Try to handle common issues
+        if [[ "$OS" == "macos" ]]; then
+            # macOS specific: Check for locked files
+            if command -v chflags &>/dev/null; then
+                log_info "Attempting to unlock files..."
+                chflags -R nouchg "$dir" 2>/dev/null || true
+            fi
+        else
+            # Linux: Check permissions
+            if [ -w "$dir" ]; then
+                # Try with sudo if available and we're not already root
+                if [ "$EUID" -ne 0 ] && command -v sudo &>/dev/null; then
+                    log_info "Attempting removal with elevated privileges..."
+                    if sudo rm -rf "$dir" 2>/dev/null; then
+                        if [ ! -d "$dir" ]; then
+                            log_success "Directory removed with sudo"
+                            return 0
+                        fi
+                    fi
+                fi
+            fi
+        fi
+        
+        # Check if directory still exists
+        if [ ! -d "$dir" ]; then
+            log_success "Directory removed successfully"
+            return 0
+        fi
+        
+        # If still here, wait before retry
+        if [ $i -lt $max_retries ]; then
+            log_warning "Waiting $retry_delay seconds before retry..."
+            sleep $retry_delay
+            retry_delay=$((retry_delay * 2))  # Exponential backoff
+        fi
+    done
+    
+    # All retries failed
+    log_error "Failed to remove directory after $max_retries attempts"
+    log_info "Manual intervention required. Please try:"
+    echo "  1. Close any programs using files in: $dir"
+    echo "  2. Check file permissions"
+    echo "  3. Run manually: rm -rf \"$dir\""
+    if [[ "$OS" != "macos" ]] && [ "$EUID" -ne 0 ]; then
+        echo "  4. Or with sudo: sudo rm -rf \"$dir\""
+    fi
+    return 1
+}
+
+# Helper function: Clone with retry logic
+clone_with_retry() {
+    local repo_path="$1"
+    local clone_dir="$2"
+    local max_retries=3
+    local retry_delay=2
+    
+    for i in $(seq 1 $max_retries); do
+        log_info "Cloning repository (attempt $i/$max_retries)..."
+        
+        # Clear any partial clone
+        if [ -d "$clone_dir" ]; then
+            log_warning "Partial clone detected, cleaning up..."
+            if ! safe_remove_directory "$clone_dir"; then
+                return 1
+            fi
+        fi
+        
+        # Attempt clone - show progress to user
+        log_info "Starting clone operation. This may take several minutes for large repositories..."
+        echo ""
+        
+        # Run clone, show output to user AND log it
+        # We'll save last lines for error analysis if needed
+        gh repo clone "$repo_path" "$clone_dir" 2>&1 | tee -a "$LOG_FILE"
+        local clone_exit_code=${PIPESTATUS[0]}  # Get exit code of gh command, not tee
+        
+        echo ""  # Add spacing after clone output
+        
+        # Verify clone actually succeeded with multiple checks
+        if [ $clone_exit_code -eq 0 ]; then
+            # Check for .git directory
+            if [ -d "$clone_dir/.git" ]; then
+                # Additional verification - check if git recognizes it as a valid repo
+                if cd "$clone_dir" 2>/dev/null; then
+                    if git status &>/dev/null; then
+                        # Final check - ensure there are actual files
+                        local file_count=$(find . -type f -not -path "./.git/*" 2>/dev/null | wc -l)
+                        if [ $file_count -gt 0 ]; then
+                            cd - >/dev/null
+                            log_success "Repository cloned successfully"
+                            return 0
+                        else
+                            cd - >/dev/null
+                            log_warning "Clone appeared to succeed but no files found in repository"
+                        fi
+                    else
+                        cd - >/dev/null
+                        log_warning "Clone appeared to succeed but git status failed"
+                    fi
+                else
+                    log_warning "Clone appeared to succeed but cannot access directory"
+                fi
+            else
+                log_warning "Clone reported success but .git directory not found"
+            fi
+        fi
+        
+        # If we get here, clone failed
+        log_warning "Clone failed (check output above for details)"
+        
+        # Check last few lines of log for SSL errors
+        if [ -f "$LOG_FILE" ] && tail -n 10 "$LOG_FILE" | grep -qE "SSL|decryption failed|bad record mac"; then
+            log_warning "SSL/TLS error detected. This could be caused by:"
+            echo "  - Corporate proxy or firewall"
+            echo "  - Antivirus software intercepting SSL"
+            echo "  - Network connectivity issues"
+            echo "  - Git SSL configuration"
+            echo ""
+            echo "Try running: git config --global http.sslVerify false"
+            echo "Note: Only use this temporarily for testing!"
+        fi
+        
+        # Check for common issues
+        if ! gh auth status &>/dev/null; then
+            log_error "GitHub authentication lost. Please run: gh auth login"
+            return 1
+        fi
+        
+        if ! ping -c 1 github.com &>/dev/null; then
+            log_warning "Network connectivity issue detected"
+        fi
+        
+        # Wait before retry
+        if [ $i -lt $max_retries ]; then
+            log_info "Waiting $retry_delay seconds before retry..."
+            sleep $retry_delay
+            retry_delay=$((retry_delay * 2))
+        fi
+    done
+    
+    # All retries failed
+    log_error "Failed to clone repository after $max_retries attempts"
+    log_info "Please check:"
+    echo "  1. Network connectivity: ping github.com"
+    echo "  2. GitHub authentication: gh auth status"
+    echo "  3. Repository access: gh repo view $repo_path"
+    echo "  4. Disk space: df -h"
+    return 1
 }
 
 # Clone appropriate repository
@@ -571,25 +912,14 @@ clone_repository() {
     while [ $attempt -le $max_attempts ]; do
         REPO_URL=$(get_repository_url)
         
-        # Validate URL format
-        if [[ ! "$REPO_URL" =~ ^https://github\.com/[^/]+/[^/]+$ ]]; then
-            log_error "Invalid GitHub repository URL format"
-            log_info "Expected format: https://github.com/owner/repository"
-            if [ $attempt -lt $max_attempts ]; then
-                echo ""
-                log_warning "Please try again (Attempt $attempt of $max_attempts)"
-                ((attempt++))
-                continue
-            else
-                log_error "Maximum attempts reached. Exiting."
-                exit 1
-            fi
-        fi
+        # Save state for recovery
+        save_state "last_repo_url" "$REPO_URL"
         
-        # Extract repository name from URL
-        REPO_NAME=$(basename "$REPO_URL" .git)
-        REPO_OWNER=$(echo "$REPO_URL" | sed -E 's|https://github.com/([^/]+)/.*|\1|')
-        REPO_PATH="$REPO_OWNER/$REPO_NAME"
+        # Extract repository name from normalized URL (https://github.com/owner/repo)
+        # Since URL is normalized, we can use simple extraction
+        REPO_PATH="${REPO_URL#https://github.com/}"  # Remove prefix
+        REPO_OWNER="${REPO_PATH%%/*}"                # Everything before first /
+        REPO_NAME="${REPO_PATH#*/}"                  # Everything after first /
         
         log_info "Repository: $REPO_PATH"
         
@@ -633,8 +963,20 @@ clone_repository() {
         case $choice in
             1)
                 log_info "Removing existing directory..."
-                rm -rf "$CLONE_DIR"
-                log_success "Existing directory removed"
+                if safe_remove_directory "$CLONE_DIR"; then
+                    # Directory removed successfully, continue with clone
+                    :
+                else
+                    log_error "Failed to remove existing directory"
+                    echo ""
+                    echo "Recovery options:"
+                    echo "  1. Fix the issue manually and re-run the script"
+                    echo "  2. Choose a different directory when prompted"
+                    echo "  3. Run the script from a different location"
+                    echo ""
+                    read -p "Press Enter to exit and try again..." 
+                    exit 1
+                fi
                 ;;
             2)
                 log_info "Keeping existing directory. Skipping clone."
@@ -653,14 +995,22 @@ clone_repository() {
         esac
     fi
     
-    # Clone the repository
-    log_info "Cloning repository: $REPO_PATH"
-    gh repo clone "$REPO_PATH" "$CLONE_DIR"
-    
-    log_success "Repository cloned to: $CLONE_DIR"
-    
-    # Export for use in subsequent scripts
-    export STACK_DIR=$CLONE_DIR
+    # Clone the repository with retry logic
+    log_info "Starting repository clone process..."
+    if clone_with_retry "$REPO_PATH" "$CLONE_DIR"; then
+        log_success "Repository successfully cloned to: $CLONE_DIR"
+        export STACK_DIR=$CLONE_DIR
+    else
+        log_error "Repository cloning failed"
+        echo ""
+        echo "Next steps:"
+        echo "  1. Fix any issues mentioned above"
+        echo "  2. Re-run this script: $0"
+        echo "  3. Or manually clone: gh repo clone $REPO_PATH $CLONE_DIR"
+        echo ""
+        echo "For help, check the log file: $LOG_FILE"
+        exit 1
+    fi
 }
 
 # System validation
@@ -838,7 +1188,8 @@ check_docker_status() {
 
 # Display installation summary
 show_summary() {
-    clear
+    echo ""
+    echo ""
     echo "=============================================="
     echo "   Stack Masters Installation Summary"
     echo "=============================================="
@@ -990,6 +1341,60 @@ show_summary() {
     log_info "Log file: $LOG_FILE"
 }
 
+# Progress tracking
+STEPS_TOTAL=8
+STEP_CURRENT=0
+
+show_progress() {
+    local step_name="$1"
+    STEP_CURRENT=$((STEP_CURRENT + 1))
+    echo ""
+    echo "=============================================="
+    echo -e "${BLUE}Step $STEP_CURRENT of $STEPS_TOTAL: $step_name${NC}"
+    echo "=============================================="
+    echo ""
+    save_state "current_step" "$STEP_CURRENT"
+    save_state "current_step_name" "$step_name"
+}
+
+# Cleanup function for interruptions
+cleanup_on_exit() {
+    local exit_code=$?
+    if [ $exit_code -ne 0 ]; then
+        echo ""
+        log_warning "Setup interrupted or failed!"
+        
+        local current_step=$(get_state "current_step_name")
+        if [ -n "$current_step" ]; then
+            echo "Failed at step: $current_step"
+        fi
+        
+        echo ""
+        echo "Recovery options:"
+        echo "  1. Check the log file for details: $LOG_FILE"
+        echo "  2. Fix any issues mentioned above"
+        echo "  3. Re-run the script to continue: $0"
+        echo ""
+        
+        # Save current state for recovery
+        if [ -n "$REPO_URL" ]; then
+            save_state "last_repo_url" "$REPO_URL"
+        fi
+        if [ -n "$CLONE_DIR" ]; then
+            save_state "last_clone_dir" "$CLONE_DIR"
+        fi
+    else
+        # Success - clear state
+        clear_state
+        echo ""
+        log_success "Setup completed successfully!"
+    fi
+}
+
+# Set up signal handlers
+trap cleanup_on_exit EXIT
+trap 'echo ""; log_warning "Setup interrupted by user"; exit 130' INT TERM
+
 # Main installation flow
 main() {
     clear
@@ -998,6 +1403,24 @@ main() {
     echo "   Stack Masters Setup Script v${VERSION}"
     echo "=============================================="
     echo ""
+    
+    # Check for previous incomplete setup
+    local last_repo=$(get_state "last_repo_url")
+    local last_dir=$(get_state "last_clone_dir")
+    if [ -n "$last_repo" ] || [ -n "$last_dir" ]; then
+        log_warning "Previous setup was interrupted"
+        echo "Last attempted repository: ${last_repo:-unknown}"
+        echo "Last attempted directory: ${last_dir:-unknown}"
+        echo ""
+        read -p "Continue with previous setup? [Y/n]: " continue_prev
+        if [[ "$continue_prev" =~ ^[Yy]?$ ]]; then
+            REPO_URL="$last_repo"
+            CLONE_DIR="$last_dir"
+        else
+            clear_state
+        fi
+        echo ""
+    fi
     
     # Auto-elevate if needed (must be before any operations)
     auto_elevate "$@"
@@ -1087,13 +1510,17 @@ main() {
     echo "     - Check system resources"
     echo ""
     
-    # Get confirmation
-    echo -e "${YELLOW}Do you want to proceed with the installation?${NC}"
-    read -p "Type 'yes' to continue or anything else to exit: " confirmation
-    
-    if [ "$confirmation" != "yes" ]; then
-        log_warning "Installation cancelled by user"
-        exit 0
+    # Get confirmation unless auto-confirm is set
+    if [ "$AUTO_CONFIRM" != "true" ]; then
+        echo -e "${YELLOW}Do you want to proceed with the installation?${NC}"
+        read -p "Type 'yes' to continue or anything else to exit: " confirmation
+        
+        if [ "$confirmation" != "yes" ]; then
+            log_warning "Installation cancelled by user"
+            exit 0
+        fi
+    else
+        log_info "Auto-confirm mode enabled, proceeding with installation..."
     fi
     
     echo ""
@@ -1102,21 +1529,31 @@ main() {
     echo ""
     
     # System preparation
+    show_progress "Updating system packages"
     update_system
+    
+    show_progress "Installing core dependencies"
     install_core_deps
     
     # Install components
+    show_progress "Installing Git"
     install_git
+    
+    show_progress "Installing GitHub CLI"
     install_github_cli
+    
+    show_progress "Installing Docker"
     install_docker
     
-    # System preparation complete
-    
     # GitHub authentication and repository setup
+    show_progress "Setting up GitHub authentication"
     github_auth
+    
+    show_progress "Cloning repository"
     clone_repository
     
     # Validate installation
+    show_progress "Validating installation"
     validate_system
     
     # Show summary
