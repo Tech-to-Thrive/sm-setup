@@ -607,71 +607,63 @@ get_repository_url() {
 
 # Prompt user for clone directory selection
 prompt_clone_directory() {
-    # Use consistent location across all Unix-like systems
-    local default_dir="$HOME/stack-masters"
+    # System-wide defaults for PRODUCTION
+    local system_dir
+    local user_dir="$HOME/stack-masters"
+    
+    if [[ "$OS" == "linux" ]]; then
+        system_dir="/opt/stack-masters"
+    else
+        # macOS - use /usr/local for system-wide (production)
+        system_dir="/usr/local/stack-masters"
+    fi
     
     echo ""
     log_info "Repository Clone Location"
     echo ""
     echo "Where would you like to clone the repository?"
     echo ""
-    echo -e "${YELLOW}Important:${NC} Choose a permanent location where you'll keep this for updates and patches."
-    echo -e "${BLUE}If unsure, use the recommended option (1).${NC}"
-    
-    # Add system-specific guidance
-    if [[ "$OS" == "linux" ]]; then
-        echo ""
-        echo -e "${CYAN}Note: On Linux servers, consider using a system-wide location like /opt/stack-masters${NC}"
-        echo -e "${CYAN}if multiple users need access to the Docker containers.${NC}"
-    fi
+    echo -e "${YELLOW}Important: Since Docker runs system-wide, choose an appropriate location.${NC}"
+    echo -e "${BLUE}For production use, option 1 (system-wide) is strongly recommended.${NC}"
     echo ""
     echo "Repository name: $REPO_NAME"
     echo "Current directory: $(pwd)"
     echo ""
     echo "Options:"
-    echo "  1. $default_dir (recommended)"
-    echo "  2. $(pwd) (current directory)"
-    if [[ "$OS" == "linux" ]]; then
-        echo "  3. /opt/stack-masters (system-wide, requires sudo)"
-        echo "  4. Custom path"
-    else
-        echo "  3. Custom path"
-    fi
+    echo -e "  1. $system_dir (recommended - system-wide, all users) ${GREEN}✓${NC}"
+    echo -e "  2. $user_dir (user-specific, won't work for other users) ${YELLOW}⚠${NC}"
+    echo "  3. $(pwd) (current directory)"
+    echo "  4. Custom path"
     echo ""
     
-    if [[ "$OS" == "linux" ]]; then
-        read -p "Enter choice [1-4] or custom path (default: 1): " choice
-    else
-        read -p "Enter choice [1-3] or custom path (default: 1): " choice
-    fi
+    read -p "Enter choice [1-4] or custom path (default: 1): " choice
     
     case $choice in
         1|"")
-            CLONE_BASE_DIR="$default_dir"
+            # DEFAULT: System-wide for production
+            CLONE_BASE_DIR="$system_dir"
+            log_info "System-wide location selected. This is the recommended choice for Docker deployments."
+            echo ""
+            if [[ "$OS" == "linux" ]]; then
+                echo -e "${CYAN}Note: Docker containers will be accessible to all users and system services.${NC}"
+            else
+                echo -e "${CYAN}Note: This will require sudo permissions for initial setup.${NC}"
+            fi
+            echo ""
             ;;
         2)
-            CLONE_BASE_DIR="$(pwd)"
+            # User-specific with warning
+            CLONE_BASE_DIR="$user_dir"
+            log_warning "User-specific location selected. Docker containers may not be accessible to other users or system services."
+            echo ""
+            read -p "Press Enter to continue or Ctrl+C to cancel..."
             ;;
         3)
-            if [[ "$OS" == "linux" ]]; then
-                CLONE_BASE_DIR="/opt/stack-masters"
-                log_warning "System-wide location selected. This will require sudo permissions."
-                echo "Docker containers will be accessible to all users and system services."
-                echo ""
-                read -p "Press Enter to continue or Ctrl+C to cancel..."
-            else
-                read -p "Enter custom path: " custom_path
-                CLONE_BASE_DIR="$custom_path"
-            fi
+            CLONE_BASE_DIR="$(pwd)"
             ;;
         4)
-            if [[ "$OS" == "linux" ]]; then
-                read -p "Enter custom path: " custom_path
-                CLONE_BASE_DIR="$custom_path"
-            else
-                # On non-Linux, 4 is not a valid option, treat as custom path
-                CLONE_BASE_DIR="$choice"
-            fi
+            read -p "Enter custom path: " custom_path
+            CLONE_BASE_DIR="$custom_path"
             ;;
         *)
             # Treat anything else as a custom path
