@@ -687,44 +687,97 @@ prompt_clone_directory() {
 validate_and_create_directory() {
     local dir="$1"
     
-    # Check if directory exists and is writable, or if parent is writable
-    if [ -d "$dir" ]; then
-        if [ ! -w "$dir" ]; then
-            log_error "Directory $dir is not writable"
-            log_info "Please choose a different location or run with appropriate permissions"
-            exit 1
-        fi
-        log_info "Using existing directory: $dir"
-    else
-        # Check if parent directory exists and is writable
-        local parent_dir=$(dirname "$dir")
-        if [ ! -d "$parent_dir" ] || [ ! -w "$parent_dir" ]; then
-            log_error "Cannot create directory $dir - parent directory $parent_dir is not accessible"
-            log_info "Please choose a different location or check permissions"
-            exit 1
-        fi
+    # Try to create directory - let the OS tell us if we need elevated permissions
+    attempt_directory_creation() {
+        local target_dir="$1"
+        local with_sudo="$2"
         
-        # Create the directory
-        if mkdir -p "$dir" 2>/dev/null; then
-            log_success "Created directory: $dir"
-        else
-            # Try with sudo if it's a system directory
-            if [[ "$dir" =~ ^/(opt|srv|var)/ ]] && command -v sudo &>/dev/null; then
-                log_info "Attempting to create system directory with sudo..."
-                if sudo mkdir -p "$dir"; then
-                    # Set ownership to current user for easier management
-                    sudo chown -R "$USER:$(id -gn)" "$dir"
-                    log_success "Created system directory: $dir"
-                else
-                    log_error "Failed to create directory even with sudo: $dir"
-                    exit 1
+        if [[ "$with_sudo" == "true" ]] && [ "$EUID" -ne 0 ] && command -v sudo &>/dev/null; then
+            log_info "Attempting to create directory with elevated permissions..."
+            if sudo mkdir -p "$target_dir" 2>/dev/null; then
+                # Set ownership to current user for easier management
+                # Skip for certain system directories that should remain root-owned
+                if [[ ! "$target_dir" =~ ^/(System|usr/bin|usr/sbin|etc|lib|bin|sbin|boot|root)/ ]]; then
+                    sudo chown -R "$USER:$(id -gn)" "$target_dir" 2>/dev/null || true
                 fi
-            else
-                log_error "Failed to create directory: $dir"
-                exit 1
+                return 0
             fi
+        else
+            mkdir -p "$target_dir" 2>/dev/null
+        fi
+        return $?
+    }
+    
+    # Check if directory already exists
+    if [ -d "$dir" ]; then
+        # Directory exists, check if we can write to it
+        if [ -w "$dir" ]; then
+            log_info "Using existing directory: $dir"
+            return 0
+        else
+            # Directory exists but isn't writable
+            log_warning "Directory exists but isn't writable: $dir"
+            
+            # Try to fix permissions with sudo if available
+            if [ "$EUID" -ne 0 ] && command -v sudo &>/dev/null; then
+                log_info "Attempting to fix permissions..."
+                if sudo chown -R "$USER:$(id -gn)" "$dir" 2>/dev/null; then
+                    log_success "Fixed permissions for existing directory: $dir"
+                    return 0
+                fi
+            fi
+            
+            log_error "Cannot write to directory: $dir"
+            log_info "Please choose a different location or fix permissions manually"
+            exit 1
         fi
     fi
+    
+    # Directory doesn't exist, need to create it
+    log_info "Creating directory: $dir"
+    
+    # First attempt: Try without sudo (works for most user directories)
+    if attempt_directory_creation "$dir" "false"; then
+        log_success "Created directory: $dir"
+        return 0
+    fi
+    
+    # First attempt failed - could be permissions issue
+    # Second attempt: Try with sudo if available and we're not already root
+    if [ "$EUID" -ne 0 ] && command -v sudo &>/dev/null; then
+        if attempt_directory_creation "$dir" "true"; then
+            log_success "Created directory with elevated permissions: $dir"
+            return 0
+        fi
+    fi
+    
+    # Both attempts failed - provide helpful error message
+    log_error "Failed to create directory: $dir"
+    
+    # Check why it might have failed
+    local parent_dir=$(dirname "$dir")
+    if [ ! -d "$parent_dir" ]; then
+        log_error "Parent directory does not exist: $parent_dir"
+        log_info "You may need to create the parent directory first or choose a different location"
+    elif [ ! -w "$parent_dir" ]; then
+        log_error "No write permission for parent directory: $parent_dir"
+        if [ "$EUID" -ne 0 ]; then
+            log_info "You may need administrator privileges for this location"
+            log_info "Try running with sudo or choose a different location"
+        fi
+    else
+        log_error "Unknown error creating directory"
+    fi
+    
+    log_info ""
+    log_info "Suggested alternatives:"
+    log_info "  - Your home directory: $HOME/StackMasters"
+    log_info "  - Current directory: $(pwd)/StackMasters"
+    if [ "$EUID" -ne 0 ] && command -v sudo &>/dev/null; then
+        log_info "  - Re-run the script with sudo if you need a system location"
+    fi
+    
+    exit 1
 }
 
 # Helper function: Safe directory removal with retry logic
@@ -819,10 +872,17 @@ clone_with_retry() {
         log_info "Starting clone operation. This may take several minutes for large repositories..."
         echo ""
         
-        # Run clone, show output to user AND log it
-        # We'll save last lines for error analysis if needed
-        gh repo clone "$repo_path" "$clone_dir" 2>&1 | tee -a "$LOG_FILE"
-        local clone_exit_code=${PIPESTATUS[0]}  # Get exit code of gh command, not tee
+        # Run clone and let user see the progress naturally
+        # Don't redirect stderr so git's progress bars work properly
+        # Log the command being run for debugging
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] INFO: Running: gh repo clone $repo_path $clone_dir" >> "$LOG_FILE" 2>/dev/null
+        
+        # Execute clone with proper terminal output for progress display
+        gh repo clone "$repo_path" "$clone_dir"
+        local clone_exit_code=$?
+        
+        # Log the result
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] INFO: Clone exit code: $clone_exit_code" >> "$LOG_FILE" 2>/dev/null
         
         echo ""  # Add spacing after clone output
         
@@ -941,6 +1001,9 @@ clone_repository() {
     
     # Prompt user for clone directory
     prompt_clone_directory
+    
+    # Save state immediately after directory is chosen
+    save_state "last_clone_dir" "$CLONE_DIR"
     
     # Handle existing directory
     if [ -d "$CLONE_DIR" ]; then
