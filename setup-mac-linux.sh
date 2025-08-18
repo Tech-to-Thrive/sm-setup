@@ -614,8 +614,8 @@ prompt_clone_directory() {
     if [[ "$OS" == "linux" ]]; then
         system_dir="/opt/stack-masters"
     else
-        # macOS - use /usr/local for system-wide (production)
-        system_dir="/usr/local/stack-masters"
+        # macOS - use /Library for system-wide production infrastructure (Apple convention)
+        system_dir="/Library/StackMasters"
     fi
     
     echo ""
@@ -647,7 +647,8 @@ prompt_clone_directory() {
             if [[ "$OS" == "linux" ]]; then
                 echo -e "${CYAN}Note: Docker containers will be accessible to all users and system services.${NC}"
             else
-                echo -e "${CYAN}Note: This will require sudo permissions for initial setup.${NC}"
+                echo -e "${CYAN}Note: /Library is Apple's standard location for system services.${NC}"
+                echo -e "${CYAN}      This will require sudo permissions for initial setup.${NC}"
             fi
             echo ""
             ;;
