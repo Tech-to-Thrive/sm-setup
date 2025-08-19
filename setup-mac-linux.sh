@@ -4,12 +4,16 @@
 # USAGE: Always run without sudo: ./setup-mac-linux.sh
 #        The script will auto-elevate on Linux if needed
 #
+# Default Install Locations:
+#   macOS: /Users/Shared/stack-masters (shared, no sudo required)
+#   Linux: /opt/stack-masters (system-wide, may require sudo)
+#
 # Supports: macOS, Ubuntu 20.04+, Debian 10+, RHEL 8+, CentOS 8+, AlmaLinux 8+
 
 set -euo pipefail
 
 # Script version
-VERSION="1.2.1"
+VERSION="1.3.0"
 
 # Parse command line arguments
 SKIP_AUTH=false
@@ -613,10 +617,10 @@ prompt_clone_directory() {
     local user_dir
     
     if [[ "$OS" == "macos" ]]; then
-        # macOS - use /Library for system-wide production infrastructure (Apple convention)
-        system_dir="/Library/StackMasters"
-        # macOS - use ~/Library for user-specific app data (Apple convention)
-        user_dir="$HOME/Library/StackMasters"
+        # macOS - use /Users/Shared for multi-user access without sudo requirements
+        system_dir="/Users/Shared/stack-masters"
+        # macOS - use home directory for user software
+        user_dir="$HOME/stack-masters"
     else
         # Linux (all distributions) - use /opt for system-wide software
         system_dir="/opt/stack-masters"
@@ -629,15 +633,27 @@ prompt_clone_directory() {
     echo ""
     echo "Where would you like to clone the repository?"
     echo ""
-    echo -e "${YELLOW}Important: Since Docker runs system-wide, choose an appropriate location.${NC}"
-    echo -e "${BLUE}For production use, option 1 (system-wide) is strongly recommended.${NC}"
+    echo -e "${YELLOW}⚠ IMPORTANT: Choose a location you'll use long-term${NC}"
+    echo -e "${CYAN}This location will be used for:${NC}"
+    echo "  • The Stack Masters repository and all its files"
+    echo "  • Docker container volumes and configurations"
+    echo "  • Future updates and maintenance operations"
+    echo "  • Database files and application data"
+    echo ""
+    echo -e "${YELLOW}Note: Moving the repository later requires reconfiguring Docker containers${NC}"
+    echo ""
+    echo -e "${BLUE}For production use, option 1 (shared location) is strongly recommended.${NC}"
     echo ""
     echo "Repository name: $REPO_NAME"
     echo "Current directory: $(pwd)"
     echo ""
     echo "Options:"
-    echo -e "  1. $system_dir (recommended - system-wide, all users) ${GREEN}✓${NC}"
-    echo -e "  2. $user_dir (user-specific, won't work for other users) ${YELLOW}⚠${NC}"
+    if [[ "$OS" == "macos" ]]; then
+        echo -e "  1. $system_dir (recommended - shared, all users) ${GREEN}✓${NC}"
+    else
+        echo -e "  1. $system_dir (recommended - system-wide, all users) ${GREEN}✓${NC}"
+    fi
+    echo -e "  2. $user_dir (user-specific, limited access) ${YELLOW}⚠${NC}"
     echo "  3. $(pwd) (current directory)"
     echo "  4. Custom path"
     echo ""
@@ -646,36 +662,60 @@ prompt_clone_directory() {
     
     case $choice in
         1|"")
-            # DEFAULT: System-wide for production
+            # DEFAULT: Shared/system-wide for production
             CLONE_BASE_DIR="$system_dir"
-            log_info "System-wide location selected. This is the recommended choice for Docker deployments."
-            echo ""
             if [[ "$OS" == "macos" ]]; then
-                echo -e "${CYAN}Note: /Library is Apple's standard location for system services.${NC}"
-                echo -e "${CYAN}      This will require sudo permissions for initial setup.${NC}"
+                log_info "Shared location selected. This is the recommended choice for production deployments."
+                echo ""
+                echo -e "${CYAN}Note: /Users/Shared is macOS's standard location for shared data${NC}"
+                echo -e "${CYAN}      • Accessible by all users without requiring admin privileges${NC}"
+                echo -e "${CYAN}      • Docker Desktop will have full access to this directory${NC}"
+                echo -e "${CYAN}      • Updates and maintenance can be performed easily${NC}"
             else
-                echo -e "${CYAN}Note: Docker containers will be accessible to all users and system services.${NC}"
-                echo -e "${CYAN}      This will require sudo permissions for initial setup.${NC}"
+                log_info "System-wide location selected. This is the recommended choice for production deployments."
+                echo ""
+                echo -e "${CYAN}Note: /opt is Linux's standard location for optional software${NC}"
+                echo -e "${CYAN}      • Docker containers will be accessible to all users${NC}"
+                echo -e "${CYAN}      • System services can access this location${NC}"
+                echo -e "${CYAN}      • May require sudo permissions for initial setup${NC}"
             fi
             echo ""
             ;;
         2)
             # User-specific with warning
             CLONE_BASE_DIR="$user_dir"
-            log_warning "User-specific location selected. Docker containers may not be accessible to other users or system services."
+            log_warning "User-specific location selected. This may cause issues with Docker."
             echo ""
-            read -p "Press Enter to continue or Ctrl+C to cancel..."
+            echo -e "${YELLOW}⚠ Important limitations of user-specific locations:${NC}"
+            echo -e "${YELLOW}  • Other users cannot access Docker containers${NC}"
+            echo -e "${YELLOW}  • System services may fail to start${NC}"
+            echo -e "${YELLOW}  • Updates may require additional permissions${NC}"
+            echo -e "${YELLOW}  • Not recommended for production use${NC}"
+            echo ""
+            read -p "Press Enter to continue with this location or Ctrl+C to cancel..."
             ;;
         3)
             CLONE_BASE_DIR="$(pwd)"
+            log_info "Using current directory: $(pwd)"
+            echo ""
+            echo -e "${CYAN}Note: Ensure this directory is accessible to Docker${NC}"
+            echo ""
             ;;
         4)
             read -p "Enter custom path: " custom_path
             CLONE_BASE_DIR="$custom_path"
+            log_info "Using custom path: $custom_path"
+            echo ""
+            echo -e "${CYAN}Note: Ensure this directory is accessible to Docker and other users if needed${NC}"
+            echo ""
             ;;
         *)
             # Treat anything else as a custom path
             CLONE_BASE_DIR="$choice"
+            log_info "Using custom path: $choice"
+            echo ""
+            echo -e "${CYAN}Note: Ensure this directory is accessible to Docker and other users if needed${NC}"
+            echo ""
             ;;
     esac
     
@@ -693,6 +733,29 @@ prompt_clone_directory() {
 validate_and_create_directory() {
     local dir="$1"
     
+    # Special handling for /Users/Shared on macOS
+    if [[ "$OS" == "macos" ]] && [[ "$dir" =~ ^/Users/Shared/ ]]; then
+        # Ensure /Users/Shared exists (it should on all macOS systems)
+        if [ ! -d "/Users/Shared" ]; then
+            log_error "/Users/Shared directory not found. This is unusual for macOS."
+            log_info "You may need to create it with: sudo mkdir -p /Users/Shared"
+            return 1
+        fi
+        
+        # For /Users/Shared subdirectories, we typically don't need sudo
+        if [ ! -d "$dir" ]; then
+            if mkdir -p "$dir" 2>/dev/null; then
+                log_success "Created shared directory: $dir"
+                return 0
+            else
+                log_warning "Failed to create directory in /Users/Shared. Trying with elevated permissions..."
+            fi
+        elif [ -w "$dir" ]; then
+            log_info "Using existing shared directory: $dir"
+            return 0
+        fi
+    fi
+    
     # Try to create directory - let the OS tell us if we need elevated permissions
     attempt_directory_creation() {
         local target_dir="$1"
@@ -704,7 +767,10 @@ validate_and_create_directory() {
                 # Set ownership to current user for easier management
                 # Skip for certain system directories that should remain root-owned
                 if [[ ! "$target_dir" =~ ^/(System|usr/bin|usr/sbin|etc|lib|bin|sbin|boot|root)/ ]]; then
-                    sudo chown -R "$USER:$(id -gn)" "$target_dir" 2>/dev/null || true
+                    # On macOS, don't change ownership of /Users/Shared subdirectories
+                    if [[ "$OS" != "macos" ]] || [[ ! "$target_dir" =~ ^/Users/Shared/ ]]; then
+                        sudo chown -R "$USER:$(id -gn)" "$target_dir" 2>/dev/null || true
+                    fi
                 fi
                 return 0
             fi
@@ -777,9 +843,12 @@ validate_and_create_directory() {
     
     log_info ""
     log_info "Suggested alternatives:"
-    log_info "  - Your home directory: $HOME/StackMasters"
-    log_info "  - Current directory: $(pwd)/StackMasters"
-    if [ "$EUID" -ne 0 ] && command -v sudo &>/dev/null; then
+    log_info "  - Your home directory: $HOME/stack-masters"
+    if [[ "$OS" == "macos" ]]; then
+        log_info "  - Shared directory: /Users/Shared/stack-masters"
+    fi
+    log_info "  - Current directory: $(pwd)/stack-masters"
+    if [[ "$OS" == "linux" ]] && [ "$EUID" -ne 0 ] && command -v sudo &>/dev/null; then
         log_info "  - Re-run the script with sudo if you need a system location"
     fi
     
@@ -1205,12 +1274,21 @@ validate_system() {
         fi
     fi
     
-    # Check disk space
+    # Check disk space - check the actual clone location if available
+    local check_path
+    if [ -n "${CLONE_DIR:-}" ] && [ -d "${CLONE_DIR:-}" ]; then
+        check_path="$CLONE_DIR"
+    elif [[ "$OS" == "macos" ]]; then
+        check_path="/Users/Shared"
+    else
+        check_path="/opt"
+    fi
+    
     if [[ "$OS" == "macos" ]]; then
         # macOS df output is different
-        AVAILABLE_SPACE=$(df -g "$HOME" | tail -1 | awk '{print $4}')
+        AVAILABLE_SPACE=$(df -g "$check_path" 2>/dev/null | tail -1 | awk '{print $4}')
     else
-        AVAILABLE_SPACE=$(df -BG /opt | tail -1 | awk '{print $4}' | sed 's/G//')
+        AVAILABLE_SPACE=$(df -BG "$check_path" 2>/dev/null | tail -1 | awk '{print $4}' | sed 's/G//')
     fi
     
     if [ "$AVAILABLE_SPACE" -lt 20 ]; then
@@ -1314,11 +1392,22 @@ show_summary() {
     
     # Check system resources
     echo -e "${BLUE}System Resources:${NC}"
+    
+    # Determine path to check for disk space
+    local check_path
+    if [ -n "${CLONE_DIR:-}" ] && [ -d "${CLONE_DIR:-}" ]; then
+        check_path="$CLONE_DIR"
+    elif [[ "$OS" == "macos" ]]; then
+        check_path="/Users/Shared"
+    else
+        check_path="/opt"
+    fi
+    
     if [[ "$OS" == "macos" ]]; then
-        local free_space=$(df -g "$HOME" | tail -1 | awk '{print $4}')
+        local free_space=$(df -g "$check_path" 2>/dev/null | tail -1 | awk '{print $4}')
         local total_mem=$(($(sysctl -n hw.memsize) / 1073741824))
     else
-        local free_space=$(df -BG /opt 2>/dev/null | tail -1 | awk '{print $4}' | sed 's/G//')
+        local free_space=$(df -BG "$check_path" 2>/dev/null | tail -1 | awk '{print $4}' | sed 's/G//')
         local total_mem=$(free -g 2>/dev/null | awk '/^Mem:/{print $2}')
     fi
     
