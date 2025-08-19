@@ -610,13 +610,18 @@ get_repository_url() {
 prompt_clone_directory() {
     # System-wide defaults for PRODUCTION
     local system_dir
-    local user_dir="$HOME/stack-masters"
+    local user_dir
     
-    if [[ "$OS" == "linux" ]]; then
-        system_dir="/opt/stack-masters"
-    else
+    if [[ "$OS" == "macos" ]]; then
         # macOS - use /Library for system-wide production infrastructure (Apple convention)
         system_dir="/Library/StackMasters"
+        # macOS - use ~/Library for user-specific app data (Apple convention)
+        user_dir="$HOME/Library/StackMasters"
+    else
+        # Linux (all distributions) - use /opt for system-wide software
+        system_dir="/opt/stack-masters"
+        # Linux - use home directory for user software
+        user_dir="$HOME/stack-masters"
     fi
     
     echo ""
@@ -645,10 +650,11 @@ prompt_clone_directory() {
             CLONE_BASE_DIR="$system_dir"
             log_info "System-wide location selected. This is the recommended choice for Docker deployments."
             echo ""
-            if [[ "$OS" == "linux" ]]; then
-                echo -e "${CYAN}Note: Docker containers will be accessible to all users and system services.${NC}"
-            else
+            if [[ "$OS" == "macos" ]]; then
                 echo -e "${CYAN}Note: /Library is Apple's standard location for system services.${NC}"
+                echo -e "${CYAN}      This will require sudo permissions for initial setup.${NC}"
+            else
+                echo -e "${CYAN}Note: Docker containers will be accessible to all users and system services.${NC}"
                 echo -e "${CYAN}      This will require sudo permissions for initial setup.${NC}"
             fi
             echo ""
