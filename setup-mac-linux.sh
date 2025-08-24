@@ -251,30 +251,44 @@ update_system() {
 install_core_deps() {
     log_info "Installing core dependencies..."
     
-    # Common packages across distributions
-    CORE_PACKAGES="curl wget ca-certificates gnupg"
+    # Common packages across distributions - works on x86_64 and ARM
+    CORE_PACKAGES="curl wget ca-certificates"
     
     # Distribution-specific adjustments
     case $PKG_MANAGER in
         brew)
-            # macOS with Homebrew - add netcat and GNU coreutils
-            CORE_PACKAGES="wget gnupg netcat coreutils"
+            # macOS with Homebrew - minimal essentials only
+            CORE_PACKAGES="curl wget ca-certificates"
+            # Add gnupg if not already installed
+            command -v gpg &> /dev/null || CORE_PACKAGES="$CORE_PACKAGES gnupg"
             ;;
         apt)
-            # Ubuntu/Debian - add netcat-openbsd (preferred) and ensure coreutils
-            CORE_PACKAGES="$CORE_PACKAGES apt-transport-https lsb-release software-properties-common netcat-openbsd coreutils"
+            # Ubuntu/Debian - universally available packages
+            CORE_PACKAGES="$CORE_PACKAGES gnupg"
+            # Only add apt-transport-https if not on modern systems (it's built-in on newer versions)
+            if ! dpkg -l apt-transport-https &> /dev/null; then
+                CORE_PACKAGES="$CORE_PACKAGES apt-transport-https"
+            fi
+            # Add lsb-release only if not present
+            command -v lsb_release &> /dev/null || CORE_PACKAGES="$CORE_PACKAGES lsb-release"
             ;;
         yum|dnf)
-            # CentOS/Red Hat - add nc (netcat equivalent) and coreutils
-            CORE_PACKAGES="$CORE_PACKAGES yum-utils nc coreutils"
+            # CentOS/Red Hat/Rocky/AlmaLinux - minimal packages
+            CORE_PACKAGES="$CORE_PACKAGES gnupg2"
+            # which is more universal than lsb-release on RHEL-based systems
+            command -v which &> /dev/null || CORE_PACKAGES="$CORE_PACKAGES which"
             ;;
         pacman)
-            # Arch Linux - add gnu-netcat and coreutils
-            CORE_PACKAGES="$CORE_PACKAGES base-devel gnu-netcat coreutils"
+            # Arch Linux - minimal essentials
+            CORE_PACKAGES="$CORE_PACKAGES gnupg"
+            # Only add make/gcc if needed for building
+            command -v make &> /dev/null || CORE_PACKAGES="$CORE_PACKAGES make"
             ;;
         zypper)
-            # SUSE - add netcat-openbsd and coreutils
-            CORE_PACKAGES="$CORE_PACKAGES patterns-devel-base-devel_basis netcat-openbsd coreutils"
+            # SUSE/openSUSE - minimal packages
+            CORE_PACKAGES="$CORE_PACKAGES gpg2"
+            # Add which if not present
+            command -v which &> /dev/null || CORE_PACKAGES="$CORE_PACKAGES which"
             ;;
     esac
     
