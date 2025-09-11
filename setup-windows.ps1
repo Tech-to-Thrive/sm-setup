@@ -1677,15 +1677,17 @@ function Main {
         Write-Host "Next steps:" -ForegroundColor Cyan
         Write-Host "  1. Save any open work"
         Write-Host "  2. Restart your computer"
-        Write-Host "  3. After restart, run this script again:"
+        Write-Host "  3. After restart, run the setup script again from:"
         Write-Host ""
-        Write-Host "     .\setup-windows.ps1" -ForegroundColor Yellow
+        Write-Host "     https://github.com/Tech-to-Thrive/sm-setup" -ForegroundColor Yellow
+        Write-Host ""
+        Write-Host "     Copy the Windows command from the Quick Start section" -ForegroundColor White
         Write-Host ""
         Write-Host "  The script will:"
         Write-Host "  - Skip already installed components"
         Write-Host "  - Authenticate with GitHub (if needed)"
-        Write-Host "  - Clone your repository"
-        Write-Host "  - Run the environment setup"
+        Write-Host "  - Clone your Stack Masters repository"
+        Write-Host "  - Complete the environment setup"
         Write-Host ""
         Write-Host "================================================"
         Write-Host ""

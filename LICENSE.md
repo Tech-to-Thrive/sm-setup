@@ -1,12 +1,33 @@
 # **LICENSE AGREEMENT**
 
-## **AI Stack Masters**
+## **AI Stack Masters - DevOps Community for Self-Hosted Automation**
 
 Copyright (c) 2025 Tech to Thrive inc. All Rights Reserved.
 
 NOTICE: The GitHub repositories and all their contents (collectively, the "Repository") constitute proprietary and confidential information of AI Stack Masters. Access is granted only to authorized members of AI Stack Masters communities.
 
 For purposes of this Agreement, "Licensor" refers to AI Stack Masters, AI Stack Master Pros and Tech to Thrive Inc., collectively and individually.
+
+## **WHAT WE PROVIDE**
+
+AI Stack Masters is a DevOps community that provides infrastructure tools and expertise for deploying, monitoring, and managing self-hosted workflow automation. Through our Skool communities, members receive:
+
+**Infrastructure Tools:**
+- Production-grade monitoring and observability (Prometheus, Grafana, Loki)
+- Automated backup and restore capabilities
+- SSL/TLS certificate management
+- Unified authentication and security
+- Infrastructure deployment automation
+- Performance metrics and alerting
+
+**Community Support:**
+- Access to experienced DevOps professionals
+- Weekly office hours and troubleshooting sessions
+- Shared knowledge from production deployments
+- Collaborative problem-solving with peers
+- Direct access to maintainers and experts
+
+This is a community-driven DevOps solution. We provide the tools and expertise through our Skool communities - we do not provide licenses for third-party software. Members are responsible for properly licensing any applications they deploy.
 
 ## **LICENSE TERMS**
 
@@ -16,17 +37,28 @@ If you leave or are removed from the Skool community, you retain a perpetual, ba
 
 ## **1\. LICENSE GRANT**
 
-### **1.1 For AI Stack Masters Members (Free Community)**
+### **1.1 For AI Stack Masters Community Members (Free Skool)**
 
 Subject to your active membership in the AI Stack Masters Skool community ([https://www.skool.com/ai-stack-masters](https://www.skool.com/ai-stack-masters) ), Licensor hereby grants you a limited, non-exclusive, non-transferable, revocable license to:
 
-a) Access and clone this Repository; b) Use the Repository contents for your own projects, including professional work; c) Deploy the Repository contents for your clients as part of your services; d) Modify the Repository contents for your specific needs; e) Access all updates and new tagged versions while your membership is active; f) Participate in community discussions and support channels.
+a) Access and clone this Repository through community membership
+b) Deploy the community's DevOps tools for your own projects
+c) Provide DevOps and infrastructure services to your clients
+d) Modify the tools for your specific infrastructure needs
+e) Access all tool updates while your community membership is active
+f) Participate in community discussions, office hours, and support channels
 
-### **1.2 For AI Stack Masters Pros Members (Paid Community)**
+### **1.2 For AI Stack Masters Pros Community Members (Paid Skool)**
 
 During your active paid membership in AI Stack Masters Pros Skool community ([https://www.skool.com/ai-stack-master-pros](https://www.skool.com/ai-stack-master-pros) ), Licensor grants you a non-exclusive, non-transferable, worldwide license to:
 
-a) Access this Repository and all tagged versions; b) Use the Repository contents for unlimited professional and commercial purposes; c) Deploy for unlimited clients as part of your services; d) Create custom implementations for specific client needs; e) Integrate Repository contents into your service offerings; f) Access all updates and new tagged versions; g) Receive priority community support.
+a) Access this Repository and all tagged versions through premium membership
+b) Use the community's DevOps tools for unlimited professional deployments
+c) Provide unlimited DevOps consulting and deployment assistance to clients
+d) Create custom infrastructure solutions for specific client needs
+e) Integrate community tools into your DevOps service offerings
+f) Access all tool updates, beta features, and priority releases
+g) Receive priority support, 1-on-1 consultations, and direct expert access
 
 ### **1.3 Post-Membership Rights (Both Communities)**
 
@@ -155,6 +187,34 @@ This indemnification obligation will survive termination of this Agreement.
 ## **9\. THIRD-PARTY SOFTWARE**
 
 Third-party components are subject to their own licenses.
+
+### **9.1 n8n Workflow Automation Support**
+
+Our DevOps community provides infrastructure support for n8n workflow automation deployments. We help you successfully deploy, monitor, and manage self-hosted n8n instances.
+
+**How We Support n8n:**
+* Automated deployment and configuration management
+* Production-grade monitoring and alerting
+* Backup and disaster recovery capabilities
+* SSL/TLS and security hardening
+* Performance optimization and scaling
+* Integration through official n8n REST API and CLI
+
+**We Are a DevOps Community:**
+* We provide infrastructure tools and monitoring expertise
+* We support both n8n Community and Enterprise editions
+* We do not modify or redistribute n8n software
+* We do not provide n8n licenses
+
+**n8n Licensing:**
+Users are responsible for obtaining appropriate n8n licenses:
+* Personal/non-commercial use: n8n Community Edition is suitable
+* Commercial/business use: n8n commercial licensing required
+* Enterprise deployments: n8n Enterprise Edition recommended
+
+Our community tools enhance your n8n deployment regardless of which edition you're licensed for. We're here to solve the infrastructure challenges of self-hosting, while you handle the application licensing.
+
+Learn more about n8n licensing: https://docs.n8n.io/sustainable-use-license/
 
 ## **10\. CONTACT INFORMATION**
 
