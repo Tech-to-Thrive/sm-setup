@@ -247,18 +247,96 @@ update_system() {
     log_success "System packages updated"
 }
 
+# Check if core dependencies are already installed
+check_core_deps() {
+    local missing_deps=false
+    
+    # Check for curl
+    if ! command -v curl &> /dev/null; then
+        missing_deps=true
+        return 1
+    fi
+    
+    # Check for wget
+    if ! command -v wget &> /dev/null; then
+        missing_deps=true
+        return 1
+    fi
+    
+    # Check for ca-certificates (different check per OS)
+    if [[ "$OS" == "macos" ]]; then
+        # macOS has ca-certificates built-in, check for gnupg instead
+        if ! command -v gpg &> /dev/null; then
+            missing_deps=true
+            return 1
+        fi
+    else
+        # Linux - check for gnupg/gpg
+        if ! command -v gpg &> /dev/null && ! command -v gpg2 &> /dev/null; then
+            missing_deps=true
+            return 1
+        fi
+    fi
+    
+    return 0
+}
+
+# Check if all required software is already installed
+check_all_requirements() {
+    local all_installed=true
+    
+    # Check Git
+    if ! command -v git &> /dev/null; then
+        all_installed=false
+    fi
+    
+    # Check GitHub CLI
+    if ! command -v gh &> /dev/null; then
+        all_installed=false
+    fi
+    
+    # Check Docker
+    if ! command -v docker &> /dev/null; then
+        all_installed=false
+    fi
+    
+    # Check core dependencies
+    if ! check_core_deps; then
+        all_installed=false
+    fi
+    
+    if [ "$all_installed" = true ]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
 # Install core dependencies
 install_core_deps() {
     log_info "Installing core dependencies..."
     
-    # Common packages across distributions - works on x86_64 and ARM
-    CORE_PACKAGES="curl wget ca-certificates"
+    # Build list of packages we actually need to install
+    CORE_PACKAGES=""
+    
+    # Check what's missing and add to install list
+    # Skip curl on macOS as it's built-in and brew install curl causes issues
+    if [[ "$OS" != "macos" ]] && ! command -v curl &> /dev/null; then
+        CORE_PACKAGES="$CORE_PACKAGES curl"
+    fi
+    
+    if ! command -v wget &> /dev/null; then
+        CORE_PACKAGES="$CORE_PACKAGES wget"
+    fi
+    
+    # Always include ca-certificates as it's hard to check consistently
+    CORE_PACKAGES="$CORE_PACKAGES ca-certificates"
     
     # Distribution-specific adjustments
     case $PKG_MANAGER in
         brew)
-            # macOS with Homebrew - minimal essentials only
-            CORE_PACKAGES="curl wget ca-certificates"
+            # macOS with Homebrew - minimal essentials only (skip curl as it's built-in)
+            CORE_PACKAGES="wget ca-certificates"
             # Add gnupg if not already installed
             command -v gpg &> /dev/null || CORE_PACKAGES="$CORE_PACKAGES gnupg"
             ;;
@@ -292,8 +370,12 @@ install_core_deps() {
             ;;
     esac
     
-    log_info "Installing packages: $CORE_PACKAGES"
-    $PKG_INSTALL $CORE_PACKAGES
+    if [ -n "$(echo $CORE_PACKAGES | tr -d ' ')" ]; then
+        log_info "Installing packages: $CORE_PACKAGES"
+        $PKG_INSTALL $CORE_PACKAGES
+    else
+        log_info "All core packages already installed"
+    fi
     
     # Validate critical network utilities are available
     validate_network_utilities
@@ -1510,13 +1592,25 @@ show_summary() {
 # Progress tracking
 STEPS_TOTAL=8
 STEP_CURRENT=0
+STEPS_SKIPPED=0
 
 show_progress() {
     local step_name="$1"
+    local is_skipped="${2:-false}"
+    
+    if [ "$is_skipped" = "true" ]; then
+        STEPS_SKIPPED=$((STEPS_SKIPPED + 1))
+        STEPS_TOTAL=$((STEPS_TOTAL - 1))
+        return
+    fi
+    
     STEP_CURRENT=$((STEP_CURRENT + 1))
+    local adjusted_current=$((STEP_CURRENT))
+    local adjusted_total=$((STEPS_TOTAL))
+    
     echo ""
     echo "=============================================="
-    echo -e "${BLUE}Step $STEP_CURRENT of $STEPS_TOTAL: $step_name${NC}"
+    echo -e "${BLUE}Step $adjusted_current of $adjusted_total: $step_name${NC}"
     echo "=============================================="
     echo ""
     save_state "current_step" "$STEP_CURRENT"
@@ -1546,7 +1640,7 @@ cleanup_on_exit() {
         if [ -n "$REPO_URL" ]; then
             save_state "last_repo_url" "$REPO_URL"
         fi
-        if [ -n "$CLONE_DIR" ]; then
+        if [ -n "${CLONE_DIR:-}" ]; then
             save_state "last_clone_dir" "$CLONE_DIR"
         fi
     else
@@ -1694,14 +1788,34 @@ main() {
     log_info "Log file: $LOG_FILE"
     echo ""
     
-    # System preparation
-    show_progress "Updating system packages"
-    update_system
+    # Check if we need to install anything
+    local needs_packages=false
     
-    show_progress "Installing core dependencies"
-    install_core_deps
+    # Quick check if anything needs to be installed
+    if ! check_all_requirements; then
+        needs_packages=true
+        log_info "Some packages need to be installed"
+    else
+        log_info "All required packages are already installed - skipping system updates"
+    fi
     
-    # Install components
+    # Only update system packages if we need to install something
+    if [ "$needs_packages" = true ]; then
+        show_progress "Updating system packages"
+        update_system
+    else
+        log_info "Skipping package manager updates - all requirements already met"
+    fi
+    
+    # Only install core deps if they're missing
+    if ! check_core_deps; then
+        show_progress "Installing core dependencies"
+        install_core_deps
+    else
+        log_info "Core dependencies already installed - skipping"
+    fi
+    
+    # Install components (these functions already check if installed)
     show_progress "Installing Git"
     install_git
     
