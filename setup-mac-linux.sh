@@ -659,10 +659,11 @@ get_repository_url() {
             log_info "Expected format: https://github.com/owner/repository" >&2
             exit 1
         fi
+        save_state "repo_type" "custom"
         echo "$normalized"
         return
     fi
-    
+
     # Display to stderr so it shows even when captured
     {
         echo ""
@@ -670,39 +671,85 @@ get_repository_url() {
         log_info "REPOSITORY SETUP"
         echo "=========================================="
         echo ""
-        echo "Please provide the GitHub repository URL to clone."
+        echo "Please select which repository you want to clone:"
         echo ""
-        log_warning "Note: You must be a member of the Skool community to access these repos"
+        log_warning "Note: You must be a member of the appropriate Skool community to access these repositories"
         echo ""
-        echo -e "${GREEN}Examples:${NC}"
+        echo -e "${CYAN}Available Options:${NC}"
         echo ""
-        echo -e "${YELLOW}  1. https://github.com/AI-Stack-Master-Pros/stack-pro${NC}"
-        echo -e "     ${BLUE}(Requires membership: https://www.skool.com/ai-stack-master-pros)${NC}"
+        echo -e "${GREEN}  1. Stack Masters Community (Free)${NC}"
+        echo -e "     ${BLUE}Repository: https://github.com/AI-Stack-Masters/stack-community${NC}"
+        echo -e "     ${BLUE}Membership: https://www.skool.com/ai-stack-masters${NC}"
+        echo -e "     ${BLUE}Access: Free Skool community membership required${NC}"
         echo ""
-        echo -e "${YELLOW}  2. https://github.com/AI-Stack-Masters/stack-community${NC}"
-        echo -e "     ${BLUE}(Requires membership: https://www.skool.com/ai-stack-masters)${NC}"
+        echo -e "${YELLOW}  2. Stack Masters Pro (Paid)${NC}"
+        echo -e "     ${BLUE}Repository: https://github.com/AI-Stack-Master-Pros/stack-pro${NC}"
+        echo -e "     ${BLUE}Membership: https://www.skool.com/ai-stack-master-pros${NC}"
+        echo -e "     ${BLUE}Access: Paid Skool community membership required${NC}"
         echo ""
-        log_info "Supported formats: HTTPS URLs, SSH URLs, or just owner/repo"
+        echo -e "${CYAN}  3. Custom Repository${NC}"
+        echo -e "     ${BLUE}Enter your own GitHub repository URL${NC}"
+        echo ""
         echo "=========================================="
         echo ""
     } >&2
-    
-    read -p "$(echo -e ${GREEN}Repository URL: ${NC})" url
-    
-    # Normalize the input URL
-    local normalized=$(normalize_github_url "$url")
-    
-    if [ -z "$normalized" ]; then
-        log_error "Invalid GitHub repository URL format: $url" >&2
-        log_info "Expected formats:" >&2
-        echo "  - https://github.com/owner/repository" >&2
-        echo "  - github.com/owner/repository" >&2
-        echo "  - git@github.com:owner/repository.git" >&2
-        echo "  - owner/repository" >&2
-        exit 1
+
+    read -p "$(echo -e ${GREEN}Enter your choice [1-3] \(default: 1\): ${NC})" choice
+
+    if [ -z "$choice" ]; then
+        choice="1"
     fi
-    
-    log_success "Normalized URL: $normalized" >&2
+
+    local normalized=""
+    local repo_type="custom"
+
+    case $choice in
+        1)
+            normalized="https://github.com/AI-Stack-Masters/stack-community"
+            repo_type="free"
+            log_success "Selected: Stack Masters Community (Free)" >&2
+            ;;
+        2)
+            normalized="https://github.com/AI-Stack-Master-Pros/stack-pro"
+            repo_type="pro"
+            log_success "Selected: Stack Masters Pro (Paid)" >&2
+            echo "" >&2
+            log_warning "Pro repository requires an active paid membership at:" >&2
+            echo "https://www.skool.com/ai-stack-master-pros" >&2
+            ;;
+        3)
+            echo "" >&2
+            log_info "Enter custom repository URL" >&2
+            echo "" >&2
+            log_info "Supported formats:" >&2
+            echo "  - https://github.com/owner/repository" >&2
+            echo "  - github.com/owner/repository" >&2
+            echo "  - git@github.com:owner/repository.git" >&2
+            echo "  - owner/repository" >&2
+            echo "" >&2
+
+            read -p "$(echo -e ${GREEN}Repository URL: ${NC})" url
+            normalized=$(normalize_github_url "$url")
+
+            if [ -z "$normalized" ]; then
+                log_error "Invalid GitHub repository URL format: $url" >&2
+                exit 1
+            fi
+
+            log_success "Normalized URL: $normalized" >&2
+            repo_type="custom"
+            ;;
+        *)
+            log_error "Invalid choice: $choice" >&2
+            log_info "Please run the script again and select 1, 2, or 3" >&2
+            exit 1
+            ;;
+    esac
+
+    echo "" >&2
+
+    # Save for recovery and error handling
+    save_state "repo_type" "$repo_type"
     echo "$normalized"
 }
 
@@ -1133,39 +1180,105 @@ clone_with_retry() {
 clone_repository() {
     local max_attempts=3
     local attempt=1
-    
+
     while [ $attempt -le $max_attempts ]; do
         REPO_URL=$(get_repository_url)
-        
+
         # Save state for recovery
         save_state "last_repo_url" "$REPO_URL"
-        
+
         # Extract repository name from normalized URL (https://github.com/owner/repo)
         # Since URL is normalized, we can use simple extraction
         REPO_PATH="${REPO_URL#https://github.com/}"  # Remove prefix
         REPO_OWNER="${REPO_PATH%%/*}"                # Everything before first /
         REPO_NAME="${REPO_PATH#*/}"                  # Everything after first /
-        
+
         log_info "Repository: $REPO_PATH"
-        
+
         # Check if user has access to the repository
         if gh repo view "$REPO_PATH" &> /dev/null; then
             log_success "Access to $REPO_NAME confirmed!"
             break
         else
             log_error "Cannot access repository: $REPO_PATH"
-            log_info "Please ensure:"
-            echo "  1. You have access to this repository"
-            echo "  2. You are a member of the required Skool community"
-            echo "  3. Your GitHub authentication is working (gh auth status)"
-            
-            if [ $attempt -lt $max_attempts ]; then
+            echo ""
+
+            # Get the repository type from state
+            local repo_type=$(get_state "repo_type")
+
+            if [ "$repo_type" = "pro" ]; then
+                # Pro repository access failed
+                echo "=========================================="
+                echo -e "${RED}   PRO MEMBERSHIP REQUIRED${NC}"
+                echo "=========================================="
                 echo ""
-                log_warning "Please try again with a different URL (Attempt $attempt of $max_attempts)"
-                ((attempt++))
-            else
-                log_error "Maximum attempts reached. Exiting."
+                log_warning "The Stack Masters Pro repository requires an active paid membership."
+                echo ""
+                echo -e "${CYAN}To access the Pro repository:${NC}"
+                echo "  1. Join the paid Skool community at:"
+                echo -e "     ${YELLOW}https://www.skool.com/ai-stack-master-pros${NC}"
+                echo "  2. Complete your payment"
+                echo "  3. Ensure your GitHub account is linked in Skool"
+                echo ""
+                echo -e "${CYAN}If you believe you already have access:${NC}"
+                echo "  - Check your membership status at:"
+                echo -e "    ${YELLOW}https://www.skool.com/ai-stack-master-pros${NC}"
+                echo "  - Verify your GitHub account is correctly linked"
+                echo "  - Reach out for help in the Skool community"
+                echo ""
+                echo "=========================================="
+                echo ""
+                echo -e "${YELLOW}Would you like to try the free version instead?${NC}"
+                read -p "Type 'yes' to use Stack Masters Community (Free), or anything else to exit: " retry
+
+                if [ "$retry" = "yes" ]; then
+                    echo ""
+                    log_info "Switching to Stack Masters Community (Free)..."
+                    REPO_URL="https://github.com/AI-Stack-Masters/stack-community"
+                    save_state "last_repo_url" "$REPO_URL"
+                    save_state "repo_type" "free"
+                    # Reset attempt counter and continue loop
+                    attempt=1
+                    continue
+                else
+                    log_info "Installation cancelled"
+                    exit 0
+                fi
+            elif [ "$repo_type" = "free" ]; then
+                # Free repository access failed
+                echo "=========================================="
+                echo -e "${RED}   COMMUNITY MEMBERSHIP REQUIRED${NC}"
+                echo "=========================================="
+                echo ""
+                log_warning "The Stack Masters Community repository requires a free Skool membership."
+                echo ""
+                echo -e "${CYAN}To access the Community repository:${NC}"
+                echo "  1. Join the free Skool community at:"
+                echo -e "     ${YELLOW}https://www.skool.com/ai-stack-masters${NC}"
+                echo "  2. Ensure your GitHub account is linked in Skool"
+                echo ""
+                echo -e "${CYAN}If you believe you already have access:${NC}"
+                echo "  - Verify your GitHub account is correctly linked in Skool"
+                echo "  - Reach out for help in the community at:"
+                echo -e "    ${YELLOW}https://www.skool.com/ai-stack-masters${NC}"
+                echo ""
+                echo "=========================================="
                 exit 1
+            else
+                # Custom repository access failed
+                log_info "Please ensure:"
+                echo "  1. You have access to this repository"
+                echo "  2. Your GitHub authentication is working (gh auth status)"
+                echo "  3. The repository URL is correct"
+
+                if [ $attempt -lt $max_attempts ]; then
+                    echo ""
+                    log_warning "Please try again with a different URL (Attempt $attempt of $max_attempts)"
+                    ((attempt++))
+                else
+                    log_error "Maximum attempts reached. Exiting."
+                    exit 1
+                fi
             fi
         fi
     done

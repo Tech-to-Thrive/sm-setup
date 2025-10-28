@@ -849,45 +849,95 @@ function Get-RepositoryUrl {
             exit 1
         }
         Save-State "last_repo_url" $normalizedUrl
+        Save-State "repo_type" "custom"
         return $normalizedUrl
     }
-    
+
     Write-Host ""
-    Write-Info "Repository Setup"
-    Write-Host "Please provide the GitHub repository URL to clone."
+    Write-Host "==========================================" -ForegroundColor Cyan
+    Write-Info "REPOSITORY SETUP"
+    Write-Host "==========================================" -ForegroundColor Cyan
     Write-Host ""
-    Write-Warning "Note: You must be a member of the Skool community to access these repos"
+    Write-Host "Please select which repository you want to clone:" -ForegroundColor White
     Write-Host ""
-    Write-Host "Examples:"
-    Write-Host "  - https://github.com/AI-Stack-Master-Pros/stack-pro"
-    Write-Host "    (Requires membership: https://www.skool.com/ai-stack-master-pros)" -ForegroundColor DarkGray
+    Write-Warning "Note: You must be a member of the appropriate Skool community to access these repositories"
     Write-Host ""
-    Write-Host "  - https://github.com/AI-Stack-Masters/stack-community"
-    Write-Host "    (Requires membership: https://www.skool.com/ai-stack-masters)" -ForegroundColor DarkGray
+    Write-Host "Available Options:" -ForegroundColor Cyan
     Write-Host ""
-    Write-Info "Supported formats: HTTPS URLs, SSH URLs, or just owner/repo"
+    Write-Host "  1. Stack Masters Community (Free)" -ForegroundColor Green
+    Write-Host "     Repository: https://github.com/AI-Stack-Masters/stack-community" -ForegroundColor DarkGray
+    Write-Host "     Membership: https://www.skool.com/ai-stack-masters" -ForegroundColor DarkGray
+    Write-Host "     Access: Free Skool community membership required" -ForegroundColor DarkGray
     Write-Host ""
-    
-    $url = Read-Host "Repository URL"
-    
-    # Normalize the input URL
-    $normalizedUrl = Normalize-GitHubUrl -Url $url
-    
-    if (-not $normalizedUrl) {
-        Write-Error-Custom "Invalid GitHub repository URL format: $url"
-        Write-Info "Expected formats:"
-        Write-Host "  - https://github.com/owner/repository"
-        Write-Host "  - github.com/owner/repository"
-        Write-Host "  - git@github.com:owner/repository.git"
-        Write-Host "  - owner/repository"
-        exit 1
+    Write-Host "  2. Stack Masters Pro (Paid)" -ForegroundColor Yellow
+    Write-Host "     Repository: https://github.com/AI-Stack-Master-Pros/stack-pro" -ForegroundColor DarkGray
+    Write-Host "     Membership: https://www.skool.com/ai-stack-master-pros" -ForegroundColor DarkGray
+    Write-Host "     Access: Paid Skool community membership required" -ForegroundColor DarkGray
+    Write-Host ""
+    Write-Host "  3. Custom Repository" -ForegroundColor Cyan
+    Write-Host "     Enter your own GitHub repository URL" -ForegroundColor DarkGray
+    Write-Host ""
+    Write-Host "==========================================" -ForegroundColor Cyan
+    Write-Host ""
+
+    $choice = Read-Host "Enter your choice [1-3] (default: 1)"
+
+    if ([string]::IsNullOrEmpty($choice)) {
+        $choice = "1"
     }
-    
-    Write-Success "Normalized URL: $normalizedUrl"
-    
-    # Save for recovery
+
+    $normalizedUrl = $null
+    $repoType = "custom"
+
+    switch ($choice) {
+        "1" {
+            $normalizedUrl = "https://github.com/AI-Stack-Masters/stack-community"
+            $repoType = "free"
+            Write-Success "Selected: Stack Masters Community (Free)"
+        }
+        "2" {
+            $normalizedUrl = "https://github.com/AI-Stack-Master-Pros/stack-pro"
+            $repoType = "pro"
+            Write-Success "Selected: Stack Masters Pro (Paid)"
+            Write-Host ""
+            Write-Warning "Pro repository requires an active paid membership at:"
+            Write-Host "https://www.skool.com/ai-stack-master-pros" -ForegroundColor Yellow
+        }
+        "3" {
+            Write-Host ""
+            Write-Info "Enter custom repository URL"
+            Write-Host ""
+            Write-Info "Supported formats:"
+            Write-Host "  - https://github.com/owner/repository"
+            Write-Host "  - github.com/owner/repository"
+            Write-Host "  - git@github.com:owner/repository.git"
+            Write-Host "  - owner/repository"
+            Write-Host ""
+
+            $url = Read-Host "Repository URL"
+            $normalizedUrl = Normalize-GitHubUrl -Url $url
+
+            if (-not $normalizedUrl) {
+                Write-Error-Custom "Invalid GitHub repository URL format: $url"
+                exit 1
+            }
+
+            Write-Success "Normalized URL: $normalizedUrl"
+            $repoType = "custom"
+        }
+        default {
+            Write-Error-Custom "Invalid choice: $choice"
+            Write-Info "Please run the script again and select 1, 2, or 3"
+            exit 1
+        }
+    }
+
+    Write-Host ""
+
+    # Save for recovery and error handling
     Save-State "last_repo_url" $normalizedUrl
-    
+    Save-State "repo_type" $repoType
+
     return $normalizedUrl
 }
 
@@ -1252,24 +1302,24 @@ function Clone-WithRetry {
 
 function Clone-Repository {
     $repoUrl = Get-RepositoryUrl
-    
+
     # Save state for recovery
     Save-State -Key "last_repo_url" -Value $repoUrl
-    
+
     # Extract repository info from normalized URL (https://github.com/owner/repo)
     # Since URL is normalized, we can use simple extraction
     $repoPath = $repoUrl -replace 'https://github.com/', ''  # Remove prefix
     $repoParts = $repoPath -split '/', 2                     # Split into owner and repo
     $repoOwner = $repoParts[0]
     $repoName = $repoParts[1]
-    
+
     Write-Info "Repository: $repoPath"
-    
+
     # Prompt user for clone directory
     $cloneDir = Prompt-CloneDirectory -RepoName $repoName
-    
+
     Write-Info "Clone directory: $cloneDir"
-    
+
     # Check if user has access to the repository
     if (-not $SkipAuth) {
         try {
@@ -1278,8 +1328,76 @@ function Clone-Repository {
         }
         catch {
             Write-Error-Custom "Cannot access repository: $repoPath"
-            Write-Info "Please ensure you have access to this repository"
-            exit 1
+            Write-Host ""
+
+            # Get the repository type from state
+            $repoType = Get-State "repo_type"
+
+            if ($repoType -eq "pro") {
+                # Pro repository access failed
+                Write-Host "==========================================" -ForegroundColor Red
+                Write-Host "   PRO MEMBERSHIP REQUIRED" -ForegroundColor Red
+                Write-Host "==========================================" -ForegroundColor Red
+                Write-Host ""
+                Write-Warning "The Stack Masters Pro repository requires an active paid membership."
+                Write-Host ""
+                Write-Host "To access the Pro repository:" -ForegroundColor Cyan
+                Write-Host "  1. Join the paid Skool community at:" -ForegroundColor White
+                Write-Host "     https://www.skool.com/ai-stack-master-pros" -ForegroundColor Yellow
+                Write-Host "  2. Complete your payment" -ForegroundColor White
+                Write-Host "  3. Ensure your GitHub account is linked in Skool" -ForegroundColor White
+                Write-Host ""
+                Write-Host "If you believe you already have access:" -ForegroundColor Cyan
+                Write-Host "  - Check your membership status at:" -ForegroundColor White
+                Write-Host "    https://www.skool.com/ai-stack-master-pros" -ForegroundColor Yellow
+                Write-Host "  - Verify your GitHub account is correctly linked" -ForegroundColor White
+                Write-Host "  - Reach out for help in the Skool community" -ForegroundColor White
+                Write-Host ""
+                Write-Host "==========================================" -ForegroundColor Red
+                Write-Host ""
+                Write-Host "Would you like to try the free version instead?" -ForegroundColor Yellow
+                $retry = Read-Host "Type 'yes' to use Stack Masters Community (Free), or anything else to exit"
+
+                if ($retry -eq "yes") {
+                    Write-Host ""
+                    Write-Info "Switching to Stack Masters Community (Free)..."
+                    $script:RepoUrl = "https://github.com/AI-Stack-Masters/stack-community"
+                    Save-State "last_repo_url" $script:RepoUrl
+                    Save-State "repo_type" "free"
+                    # Recursively call Clone-Repository with the new URL
+                    return Clone-Repository
+                } else {
+                    Write-Info "Installation cancelled"
+                    exit 0
+                }
+            } elseif ($repoType -eq "free") {
+                # Free repository access failed
+                Write-Host "==========================================" -ForegroundColor Red
+                Write-Host "   COMMUNITY MEMBERSHIP REQUIRED" -ForegroundColor Red
+                Write-Host "==========================================" -ForegroundColor Red
+                Write-Host ""
+                Write-Warning "The Stack Masters Community repository requires a free Skool membership."
+                Write-Host ""
+                Write-Host "To access the Community repository:" -ForegroundColor Cyan
+                Write-Host "  1. Join the free Skool community at:" -ForegroundColor White
+                Write-Host "     https://www.skool.com/ai-stack-masters" -ForegroundColor Yellow
+                Write-Host "  2. Ensure your GitHub account is linked in Skool" -ForegroundColor White
+                Write-Host ""
+                Write-Host "If you believe you already have access:" -ForegroundColor Cyan
+                Write-Host "  - Verify your GitHub account is correctly linked in Skool" -ForegroundColor White
+                Write-Host "  - Reach out for help in the community at:" -ForegroundColor White
+                Write-Host "    https://www.skool.com/ai-stack-masters" -ForegroundColor Yellow
+                Write-Host ""
+                Write-Host "==========================================" -ForegroundColor Red
+                exit 1
+            } else {
+                # Custom repository access failed
+                Write-Info "Please ensure:"
+                Write-Host "  1. You have access to this repository" -ForegroundColor White
+                Write-Host "  2. Your GitHub authentication is working: gh auth status" -ForegroundColor White
+                Write-Host "  3. The repository URL is correct" -ForegroundColor White
+                exit 1
+            }
         }
     }
     
