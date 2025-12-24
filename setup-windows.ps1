@@ -1345,20 +1345,27 @@ function Clone-Repository {
                 Write-Host "  1. Join the paid Skool community at:" -ForegroundColor White
                 Write-Host "     https://www.skool.com/ai-stack-master-pros" -ForegroundColor Yellow
                 Write-Host "  2. Complete your payment" -ForegroundColor White
-                Write-Host "  3. Ensure your GitHub account is linked in Skool" -ForegroundColor White
+                Write-Host "  3. Confirm your GitHub username was entered correctly when you joined" -ForegroundColor White
+                Write-Host "     (If incorrect, ask a community admin for help to update it)" -ForegroundColor DarkGray
                 Write-Host ""
-                Write-Host "If you believe you already have access:" -ForegroundColor Cyan
-                Write-Host "  - Check your membership status at:" -ForegroundColor White
+                Write-Host "If you recently joined and don't have access yet:" -ForegroundColor Cyan
+                Write-Host "  1. Check your EMAIL INBOX for a GitHub organization invitation" -ForegroundColor White
+                Write-Host "     (The invitation comes from GitHub, not Skool)" -ForegroundColor DarkGray
+                Write-Host "  2. Accept the invitation to join the repository" -ForegroundColor White
+                Write-Host ""
+                Write-Host "Still no invitation? Get help:" -ForegroundColor Cyan
+                Write-Host "  - Post in the Skool community using the 'Onboarding Help' category:" -ForegroundColor White
                 Write-Host "    https://www.skool.com/ai-stack-master-pros" -ForegroundColor Yellow
-                Write-Host "  - Verify your GitHub account is correctly linked" -ForegroundColor White
-                Write-Host "  - Reach out for help in the Skool community" -ForegroundColor White
+                Write-Host "  - Include your GitHub username in your post" -ForegroundColor White
                 Write-Host ""
                 Write-Host "==========================================" -ForegroundColor Red
                 Write-Host ""
                 Write-Host "Would you like to try the free version instead?" -ForegroundColor Yellow
                 $retry = Read-Host "Type 'yes' to use Stack Masters Community (Free), or anything else to exit"
 
-                if ($retry -eq "yes") {
+                # Accept y, Y, yes, Yes, YES, etc. (case-insensitive yes confirmation)
+                # Pattern: ^[Yy]([Ee][Ss])?$ matches y|Y|yes|Yes|YES|yEs|yeS|YeS|yES|YEs
+                if ($retry -match '^[Yy]([Ee][Ss])?$') {
                     Write-Host ""
                     Write-Info "Switching to Stack Masters Community (Free)..."
                     $script:RepoUrl = "https://github.com/AI-Stack-Masters/stack-community"
@@ -1381,22 +1388,104 @@ function Clone-Repository {
                 Write-Host "To access the Community repository:" -ForegroundColor Cyan
                 Write-Host "  1. Join the free Skool community at:" -ForegroundColor White
                 Write-Host "     https://www.skool.com/ai-stack-masters" -ForegroundColor Yellow
-                Write-Host "  2. Ensure your GitHub account is linked in Skool" -ForegroundColor White
+                Write-Host "  2. Confirm your GitHub username was entered correctly when you joined" -ForegroundColor White
+                Write-Host "     (If incorrect, ask a community admin for help to update it)" -ForegroundColor DarkGray
+                Write-Host "  3. Check your EMAIL INBOX for a GitHub organization invitation" -ForegroundColor White
+                Write-Host "     (The invitation comes from GitHub, not Skool)" -ForegroundColor DarkGray
+                Write-Host "  4. Accept the invitation to join the repository" -ForegroundColor White
                 Write-Host ""
-                Write-Host "If you believe you already have access:" -ForegroundColor Cyan
-                Write-Host "  - Verify your GitHub account is correctly linked in Skool" -ForegroundColor White
-                Write-Host "  - Reach out for help in the community at:" -ForegroundColor White
+                Write-Host "Still no invitation? Get help:" -ForegroundColor Cyan
+                Write-Host "  - Post in the Skool community using the 'Onboarding Help' category:" -ForegroundColor White
                 Write-Host "    https://www.skool.com/ai-stack-masters" -ForegroundColor Yellow
+                Write-Host "  - Include your GitHub username in your post" -ForegroundColor White
                 Write-Host ""
                 Write-Host "==========================================" -ForegroundColor Red
-                exit 1
+                Write-Host ""
+                Write-Host "Options:" -ForegroundColor Yellow
+                Write-Host "  1. Retry (after joining and accepting the GitHub invitation)"
+                Write-Host "  2. Re-authenticate GitHub (gh auth login)"
+                Write-Host "  3. Exit"
+                Write-Host ""
+                $retryChoice = Read-Host "Select option [1-3] (default: 3)"
+                if ([string]::IsNullOrEmpty($retryChoice)) { $retryChoice = "3" }
+
+                switch ($retryChoice) {
+                    "1" {
+                        Write-Info "Retrying repository access..."
+                        return Clone-Repository
+                    }
+                    "2" {
+                        Write-Info "Re-authenticating with GitHub..."
+                        gh auth login
+                        if ($LASTEXITCODE -eq 0) {
+                            Write-Success "GitHub authentication successful!"
+                            return Clone-Repository
+                        } else {
+                            Write-Error-Custom "GitHub authentication failed"
+                            Read-Host "Press Enter to exit"
+                            exit 1
+                        }
+                    }
+                    default {
+                        Write-Info "Installation cancelled"
+                        Read-Host "Press Enter to exit"
+                        exit 1
+                    }
+                }
             } else {
                 # Custom repository access failed
                 Write-Info "Please ensure:"
                 Write-Host "  1. You have access to this repository" -ForegroundColor White
                 Write-Host "  2. Your GitHub authentication is working: gh auth status" -ForegroundColor White
                 Write-Host "  3. The repository URL is correct" -ForegroundColor White
-                exit 1
+
+                Write-Host ""
+                Write-Host "Options:" -ForegroundColor Yellow
+                Write-Host "  1. Retry (after verifying access)"
+                Write-Host "  2. Re-authenticate GitHub (gh auth login)"
+                Write-Host "  3. Enter a different repository URL"
+                Write-Host "  4. Exit"
+                Write-Host ""
+                $retryChoice = Read-Host "Select option [1-4] (default: 4)"
+                if ([string]::IsNullOrEmpty($retryChoice)) { $retryChoice = "4" }
+
+                switch ($retryChoice) {
+                    "1" {
+                        Write-Info "Retrying repository access..."
+                        return Clone-Repository
+                    }
+                    "2" {
+                        Write-Info "Re-authenticating with GitHub..."
+                        gh auth login
+                        if ($LASTEXITCODE -eq 0) {
+                            Write-Success "GitHub authentication successful!"
+                            return Clone-Repository
+                        } else {
+                            Write-Error-Custom "GitHub authentication failed"
+                            Read-Host "Press Enter to exit"
+                            exit 1
+                        }
+                    }
+                    "3" {
+                        Write-Host ""
+                        $newUrl = Read-Host "Enter the repository URL"
+                        if (-not [string]::IsNullOrEmpty($newUrl)) {
+                            # Update the script-level RepoUrl so Get-RepositoryUrl uses it
+                            $script:RepoUrl = $newUrl
+                            Write-Info "Retrying with new repository URL..."
+                            return Clone-Repository
+                        } else {
+                            Write-Error-Custom "No URL provided"
+                            Read-Host "Press Enter to exit"
+                            exit 1
+                        }
+                    }
+                    default {
+                        Write-Info "Installation cancelled"
+                        Read-Host "Press Enter to exit"
+                        exit 1
+                    }
+                }
             }
         }
     }
@@ -1606,7 +1695,8 @@ function Main {
         
         if (-not $Yes) {
             $continueSetup = Read-Host "Continue with previous setup? [Y/n]"
-            if ([string]::IsNullOrEmpty($continueSetup) -or $continueSetup -match '^[Yy]') {
+            # Accept empty (default), y, Y, yes, Yes, YES, etc. (case-insensitive yes confirmation)
+            if ([string]::IsNullOrEmpty($continueSetup) -or $continueSetup -match '^[Yy]([Ee][Ss])?$') {
                 if ($lastRepoUrl) { $RepoUrl = $lastRepoUrl }
                 if ($lastCloneDir) { $script:LastCloneDir = $lastCloneDir }
             }
@@ -1725,8 +1815,10 @@ function Main {
     if (-not $Yes) {
         Write-Host "Do you want to proceed with the installation?" -ForegroundColor Yellow
         $confirmation = Read-Host "Type 'yes' to continue or anything else to exit"
-        
-        if ($confirmation -ne 'yes') {
+
+        # Accept y, Y, yes, Yes, YES, etc. (case-insensitive yes confirmation)
+        # Pattern: ^[Yy]([Ee][Ss])?$ matches y|Y|yes|Yes|YES|yEs|yeS|YeS|yES|YEs
+        if (-not ($confirmation -match '^[Yy]([Ee][Ss])?$')) {
             Write-Warning "Installation cancelled by user"
             exit 0
         }

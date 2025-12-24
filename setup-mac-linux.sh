@@ -70,6 +70,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 CYAN='\033[0;36m'
+DIM='\033[2m'
 NC='\033[0m' # No Color
 
 # Initialize logging and state tracking
@@ -1218,20 +1219,27 @@ clone_repository() {
                 echo "  1. Join the paid Skool community at:"
                 echo -e "     ${YELLOW}https://www.skool.com/ai-stack-master-pros${NC}"
                 echo "  2. Complete your payment"
-                echo "  3. Ensure your GitHub account is linked in Skool"
+                echo "  3. Confirm your GitHub username was entered correctly when you joined"
+                echo -e "     ${DIM}(If incorrect, ask a community admin for help to update it)${NC}"
                 echo ""
-                echo -e "${CYAN}If you believe you already have access:${NC}"
-                echo "  - Check your membership status at:"
+                echo -e "${CYAN}If you recently joined and don't have access yet:${NC}"
+                echo "  1. Check your EMAIL INBOX for a GitHub organization invitation"
+                echo -e "     ${DIM}(The invitation comes from GitHub, not Skool)${NC}"
+                echo "  2. Accept the invitation to join the repository"
+                echo ""
+                echo -e "${CYAN}Still no invitation? Get help:${NC}"
+                echo "  - Post in the Skool community using the 'Onboarding Help' category:"
                 echo -e "    ${YELLOW}https://www.skool.com/ai-stack-master-pros${NC}"
-                echo "  - Verify your GitHub account is correctly linked"
-                echo "  - Reach out for help in the Skool community"
+                echo "  - Include your GitHub username in your post"
                 echo ""
                 echo "=========================================="
                 echo ""
                 echo -e "${YELLOW}Would you like to try the free version instead?${NC}"
                 read -p "Type 'yes' to use Stack Masters Community (Free), or anything else to exit: " retry
 
-                if [ "$retry" = "yes" ]; then
+                # Accept y, Y, yes, Yes, YES, etc. (case-insensitive yes confirmation)
+                # Pattern: ^[Yy]([Ee][Ss])?$ matches y|Y|yes|Yes|YES|yEs|yeS|YeS|yES|YEs
+                if [[ "$retry" =~ ^[Yy]([Ee][Ss])?$ ]]; then
                     echo ""
                     log_info "Switching to Stack Masters Community (Free)..."
                     REPO_URL="https://github.com/AI-Stack-Masters/stack-community"
@@ -1255,20 +1263,57 @@ clone_repository() {
                 echo -e "${CYAN}To access the Community repository:${NC}"
                 echo "  1. Join the free Skool community at:"
                 echo -e "     ${YELLOW}https://www.skool.com/ai-stack-masters${NC}"
-                echo "  2. Ensure your GitHub account is linked in Skool"
+                echo "  2. Confirm your GitHub username was entered correctly when you joined"
+                echo -e "     ${DIM}(If incorrect, ask a community admin for help to update it)${NC}"
+                echo "  3. Check your EMAIL INBOX for a GitHub organization invitation"
+                echo -e "     ${DIM}(The invitation comes from GitHub, not Skool)${NC}"
+                echo "  4. Accept the invitation to join the repository"
                 echo ""
-                echo -e "${CYAN}If you believe you already have access:${NC}"
-                echo "  - Verify your GitHub account is correctly linked in Skool"
-                echo "  - Reach out for help in the community at:"
+                echo -e "${CYAN}Still no invitation? Get help:${NC}"
+                echo "  - Post in the Skool community using the 'Onboarding Help' category:"
                 echo -e "    ${YELLOW}https://www.skool.com/ai-stack-masters${NC}"
+                echo "  - Include your GitHub username in your post"
                 echo ""
                 echo "=========================================="
-                exit 1
+                echo ""
+                echo -e "${YELLOW}Options:${NC}"
+                echo "  1. Retry (after joining and accepting the GitHub invitation)"
+                echo "  2. Re-authenticate GitHub (gh auth login)"
+                echo "  3. Exit"
+                echo ""
+                read -p "Select option [1-3] (default: 3): " retry_choice
+                retry_choice=${retry_choice:-3}
+
+                case $retry_choice in
+                    1)
+                        log_info "Retrying repository access..."
+                        attempt=1
+                        continue
+                        ;;
+                    2)
+                        log_info "Re-authenticating with GitHub..."
+                        gh auth login
+                        if [ $? -eq 0 ]; then
+                            log_success "GitHub authentication successful!"
+                            attempt=1
+                            continue
+                        else
+                            log_error "GitHub authentication failed"
+                            read -p "Press Enter to exit"
+                            exit 1
+                        fi
+                        ;;
+                    *)
+                        log_info "Installation cancelled"
+                        read -p "Press Enter to exit"
+                        exit 1
+                        ;;
+                esac
             else
                 # Custom repository access failed
                 log_info "Please ensure:"
                 echo "  1. You have access to this repository"
-                echo "  2. Your GitHub authentication is working (gh auth status)"
+                echo "  2. Your GitHub authentication is working: gh auth status"
                 echo "  3. The repository URL is correct"
 
                 if [ $attempt -lt $max_attempts ]; then
@@ -1786,7 +1831,8 @@ main() {
         echo "Last attempted directory: ${last_dir:-unknown}"
         echo ""
         read -p "Continue with previous setup? [Y/n]: " continue_prev
-        if [[ "$continue_prev" =~ ^[Yy]?$ ]]; then
+        # Accept empty (default), y, Y, yes, Yes, YES, etc. (case-insensitive yes confirmation)
+        if [[ -z "$continue_prev" ]] || [[ "$continue_prev" =~ ^[Yy]([Ee][Ss])?$ ]]; then
             REPO_URL="$last_repo"
             CLONE_DIR="$last_dir"
         else
@@ -1887,8 +1933,10 @@ main() {
     if [ "$AUTO_CONFIRM" != "true" ]; then
         echo -e "${YELLOW}Do you want to proceed with the installation?${NC}"
         read -p "Type 'yes' to continue or anything else to exit: " confirmation
-        
-        if [ "$confirmation" != "yes" ]; then
+
+        # Accept y, Y, yes, Yes, YES, etc. (case-insensitive yes confirmation)
+        # Pattern: ^[Yy]([Ee][Ss])?$ matches y|Y|yes|Yes|YES|yEs|yeS|YeS|yES|YEs
+        if [[ ! "$confirmation" =~ ^[Yy]([Ee][Ss])?$ ]]; then
             log_warning "Installation cancelled by user"
             exit 0
         fi
