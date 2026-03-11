@@ -1,0 +1,10 @@
+name: Stale
+
+on:
+  schedule:
+    - cron: "30 8 * * *"
+  workflow_dispatch:
+
+jobs:
+  stale:
+    uses: tech-to-thrive/.github/.github/workflows/reusable-stale.yml@main

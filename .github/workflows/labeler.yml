@@ -1,0 +1,9 @@
+name: Labeler
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  label:
+    uses: tech-to-thrive/.github/.github/workflows/reusable-labeler.yml@main
