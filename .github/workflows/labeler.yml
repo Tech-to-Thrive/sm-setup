@@ -7,3 +7,7 @@ on:
 jobs:
   label:
     uses: tech-to-thrive/.github/.github/workflows/reusable-labeler.yml@main
+    with:
+      # PUBLIC repo: org runner group sets allows_public_repositories: false,
+      # so self-hosted jobs queue forever and are auto-cancelled at 24h.
+      runs-on: '"ubuntu-latest"'
